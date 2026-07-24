@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КТК ЭЛОУ-АВТ — рабочее место оператора</title>
+<style>
+  :root{--bg:#0f1420;--panel:#1a2130;--line:#2b3345;--txt:#e6ebf5;--muted:#8a94a8;
+        --accent:#5B2CE0;--ok:#1E7A3D;--warn:#c9821a;--err:#c0392b;--pipe:#3a4a63;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 18px;display:flex;
+         align-items:center;gap:14px}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .badge{font-size:12px;padding:3px 9px;border-radius:20px;background:#333;color:#fff}
+  .badge.on{background:var(--ok)} .badge.off{background:#555}
+  .wrap{display:grid;grid-template-columns:1fr 340px;gap:14px;padding:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  .gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .g{background:#10161f;border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center}
+  .g .v{font-size:24px;font-weight:700} .g .u{font-size:11px;color:var(--muted)}
+  .g .n{font-size:11px;color:var(--muted);margin-bottom:4px}
+  .g.alarm{border-color:var(--err);animation:blink 1s infinite}
+  @keyframes blink{50%{background:#2a1416}}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:9px 14px;
+         font-size:13px;cursor:pointer} button:hover{opacity:.9}
+  button.sec{background:#2b3345} button.stop{background:var(--err)}
+  .slider{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--muted)}
+  input[type=range]{flex:1}
+  .feed{min-height:54px;border-radius:8px;padding:10px;font-size:13px;background:#10161f;border:1px solid var(--line)}
+  .feed.info{border-color:var(--line)} .feed.warning{border-left:4px solid var(--warn)}
+  .feed.error{border-left:4px solid var(--err)}
+  .risk{height:6px;background:#222b3a;border-radius:4px;margin-top:8px;overflow:hidden}
+  .risk>i{display:block;height:100%;background:var(--warn)}
+  .journal{max-height:230px;overflow:auto;font-size:12px}
+  .journal div{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
+  .journal b{color:var(--txt)}
+  svg text{fill:var(--txt);font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>КТК ЭЛОУ-АВТ · рабочее место оператора</h1>
+  <span id="conn" class="badge">нет связи</span>
+  <span id="run" class="badge off">ОСТАНОВ</span>
+  <span style="margin-left:auto;color:var(--muted);font-size:12px">t = <b id="clock">0</b> c</span>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <h2>Мнемосхема</h2>
+      <svg viewBox="0 0 520 300" width="100%">
+        <!-- сырьё -->
+        <line x1="20" y1="230" x2="120" y2="230" stroke="#3a4a63" stroke-width="6"/>
+        <rect x="120" y="215" width="34" height="30" rx="4" fill="#222b3a" stroke="#4a5772"/>
+        <text x="126" y="210">Насос</text>
+        <circle id="pumpLed" cx="137" cy="230" r="6" fill="#555"/>
+        <line x1="154" y1="230" x2="220" y2="230" stroke="#3a4a63" stroke-width="6"/>
+        <!-- клапан -->
+        <polygon points="220,222 238,230 220,238" fill="#4a5772"/>
+        <polygon points="256,222 238,230 256,238" fill="#4a5772"/>
+        <text x="212" y="258">Клапан</text>
+        <line x1="256" y1="230" x2="300" y2="230" stroke="#3a4a63" stroke-width="6"/>
+        <!-- колонна -->
+        <rect x="300" y="60" width="70" height="190" rx="14" fill="#141b27" stroke="#4a5772" stroke-width="2"/>
+        <rect id="levelFill" x="302" y="180" width="66" height="68" rx="12" fill="#25406b" opacity=".8"/>
+        <text x="312" y="52">Колонна</text>
+        <line x1="335" y1="250" x2="335" y2="270" stroke="#3a4a63" stroke-width="6"/>
+        <rect x="315" y="270" width="40" height="18" rx="3" fill="#222b3a" stroke="#4a5772"/>
+        <text x="322" y="283" style="font-size:9px">Нагрев</text>
+        <!-- верх: пар -->
+        <line x1="370" y1="90" x2="460" y2="90" stroke="#3a4a63" stroke-width="6"/>
+        <text x="410" y="82">дистиллят</text>
+        <!-- датчики -->
+        <text x="378" y="150" id="pTag" style="fill:#8a94a8">P —</text>
+        <text x="378" y="170" id="tTag" style="fill:#8a94a8">T —</text>
+      </svg>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>Показания</h2>
+      <div class="gauges">
+        <div class="g" id="gP"><div class="n">Давление</div><div class="v" id="vP">–</div><div class="u">кПа</div></div>
+        <div class="g" id="gT"><div class="n">Температура</div><div class="v" id="vT">–</div><div class="u">°C</div></div>
+        <div class="g" id="gF"><div class="n">Расход</div><div class="v" id="vF">–</div><div class="u">м³/ч</div></div>
+        <div class="g" id="gL"><div class="n">Уровень</div><div class="v" id="vL">–</div><div class="u">%</div></div>
+      </div>
+      <div class="controls">
+        <button onclick="cmd('start')">Пуск</button>
+        <button class="stop" onclick="cmd('stop')">Останов</button>
+        <button class="sec" onclick="cmd('set_pump','PUMP_1',1)">Насос ВКЛ</button>
+        <button class="sec" onclick="cmd('set_pump','PUMP_1',0)">Насос ВЫКЛ</button>
+        <button class="sec" onclick="cmd('ack_alarm')">Квитировать</button>
+      </div>
+      <div class="slider">Клапан сырья
+        <input type="range" min="0" max="100" value="60"
+               oninput="valveLbl.textContent=this.value;cmd('set_valve',null,+this.value)">
+        <b id="valveLbl">60</b>%
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>ИИ-ассистент</h2>
+      <div id="feed" class="feed info">Ожидание данных…</div>
+      <div class="risk"><i id="riskBar" style="width:0%"></i></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Прогноз риска ошибки</div>
+    </div>
+    <div class="panel" style="margin-top:14px">
+      <h2>Журнал действий</h2>
+      <div id="journal" class="journal"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let ws;
+function connect(){
+  ws=new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen =()=>{$('conn').textContent='на связи';$('conn').className='badge on';};
+  ws.onclose=()=>{$('conn').textContent='нет связи';$('conn').className='badge';setTimeout(connect,1500);};
+  ws.onmessage=e=>{const m=JSON.parse(e.data);
+    if(m.type==='state')   renderState(m.payload);
+    if(m.type==='feedback')renderFeed(m.payload);
+    if(m.type==='action')  logAction(m.payload);
+  };
+}
+function cmd(action,target=null,value=null){
+  if(ws&&ws.readyState===1) ws.send(JSON.stringify({action,target,value}));
+}
+function renderState(s){
+  $('clock').textContent=s.t;
+  $('vP').textContent=s.pressure; $('vT').textContent=s.temperature;
+  $('vF').textContent=s.flow;     $('vL').textContent=s.level;
+  $('pTag').textContent='P '+s.pressure; $('tTag').textContent='T '+s.temperature;
+  $('run').textContent=s.running?'В РАБОТЕ':'ОСТАНОВ';
+  $('run').className='badge '+(s.running?'on':'off');
+  const led=$('pumpLed'); const pump=(s.equipment||[]).find(e=>e.id==='PUMP_1');
+  led.setAttribute('fill', pump&&pump.on ? '#28c76f':'#555');
+  // уровень в колонне
+  const h=1.9*s.level; $('levelFill').setAttribute('y',248-h); $('levelFill').setAttribute('height',h);
+  // подсветка аварий
+  $('gP').className='g'+(s.alarms.includes('HIGH_PRESSURE')?' alarm':'');
+  $('gL').className='g'+(s.alarms.some(a=>a.includes('LEVEL'))?' alarm':'');
+  $('gT').className='g'+(s.alarms.includes('HIGH_TEMP')?' alarm':'');
+}
+function renderFeed(f){
+  const el=$('feed'); el.className='feed '+f.severity;
+  el.innerHTML=(f.error_detected?'<b>⚠ Ошибка: '+(f.error_class||'')+'</b><br>':'')+
+    f.message+(f.recommendation?'<br><i>Рекомендация: '+f.recommendation+'</i>':'');
+  $('riskBar').style.width=Math.round((f.risk_score||0)*100)+'%';
+}
+function logAction(a){
+  const d=document.createElement('div');
+  d.innerHTML=`t=${a.t}c · <b>${a.action}</b>${a.target?' '+a.target:''}${a.value!=null?' = '+a.value:''}`+
+              `${a.reaction_ms!=null?` · реакция ${a.reaction_ms} мс`:''}`;
+  $('journal').prepend(d);
+}
+connect();
+</script>
+</body>
+</html>
