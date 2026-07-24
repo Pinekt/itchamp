@@ -1,0 +1,19 @@
+# Локальный стек КТК: приложение + PostgreSQL.
+# Запуск:  docker compose up
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ktk
+      POSTGRES_PASSWORD: ktk
+      POSTGRES_DB: ktk
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ktk:ktk@db:5432/ktk
+    ports: ["8000:8000"]
+    depends_on: [db]
+volumes:
+  pgdata:

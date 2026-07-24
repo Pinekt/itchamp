@@ -88,8 +88,14 @@
         <div class="g" id="gF"><div class="n">Расход</div><div class="v" id="vF">–</div><div class="u">м³/ч</div></div>
         <div class="g" id="gL"><div class="n">Уровень</div><div class="v" id="vL">–</div><div class="u">%</div></div>
       </div>
+      <div class="slider" style="margin-top:0">Сценарий
+        <select id="scenSel" style="flex:1;background:#10161f;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px"></select>
+        <button onclick="sess('start',$('scenSel').value)">Загрузить</button>
+        <button class="sec" onclick="sess('reset')">Сброс</button>
+        <button class="sec" onclick="sess('stop')">Завершить</button>
+      </div>
       <div class="controls">
-        <button onclick="cmd('start')">Пуск</button>
+        <button onclick="cmd('start')">Пуск процесса</button>
         <button class="stop" onclick="cmd('stop')">Останов</button>
         <button class="sec" onclick="cmd('set_pump','PUMP_1',1)">Насос ВКЛ</button>
         <button class="sec" onclick="cmd('set_pump','PUMP_1',0)">Насос ВЫКЛ</button>
@@ -133,6 +139,15 @@ function connect(){
 function cmd(action,target=null,value=null){
   if(ws&&ws.readyState===1) ws.send(JSON.stringify({action,target,value}));
 }
+function sess(session_action,scenario=null){
+  if(ws&&ws.readyState===1) ws.send(JSON.stringify({session_action,scenario}));
+  if(session_action==='start') $('journal').innerHTML='';
+}
+async function loadScenarios(){
+  const r=await fetch('/api/scenarios'); const list=await r.json();
+  $('scenSel').innerHTML=list.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+}
+loadScenarios();
 function renderState(s){
   $('clock').textContent=s.t;
   $('vP').textContent=s.pressure; $('vT').textContent=s.temperature;

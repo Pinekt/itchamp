@@ -27,6 +27,39 @@ class SimulationEngine:
         self.flow = 90.0
         self.level = 50.0
         self.alarms: list[str] = []
+        # --- исполнение сценария (задачи капитана, неделя 2) ---
+        self.faults: list[dict] = []      # [{at, target, type}, ...]
+        self._fired: set[int] = set()     # индексы уже сработавших отказов
+        self._pressure_bias = 0.0         # накопленное возмущение давления от отказов
+        self.events: list[str] = []       # события текущего шага (для журнала/ИИ)
+
+    def load_scenario(self, initial: dict | None = None, faults: list[dict] | None = None) -> None:
+        """Задать начальное состояние и запланированные отказы сценария."""
+        self.faults = list(faults or [])
+        self._fired.clear()
+        self._pressure_bias = 0.0
+        for k, v in (initial or {}).items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
+    def _apply_faults(self) -> None:
+        """Срабатывание отказов, у которых наступило время at."""
+        self.events = []
+        for i, f in enumerate(self.faults):
+            if i in self._fired or self.t < f.get("at", 0):
+                continue
+            self._fired.add(i)
+            ftype = f.get("type")
+            target = f.get("target", "")
+            if ftype == "trip":                 # аварийный останов насоса
+                self.pump_on = False
+                self.events.append(f"FAULT:trip:{target}")
+            elif ftype == "pressure_up":         # нештатный рост давления
+                self._pressure_bias += 60.0
+                self.events.append(f"FAULT:pressure_up:{target}")
+            elif ftype == "heater_off":
+                self.heater_on = False
+                self.events.append(f"FAULT:heater_off:{target}")
 
     # --- приём команды от UI ---
     def apply(self, cmd: ControlCommand) -> None:
@@ -46,6 +79,7 @@ class SimulationEngine:
     # --- один шаг интегрирования (dt секунд) ---
     def step(self, dt: float = 1.0) -> ParameterState:
         self.t += dt
+        self._apply_faults()
         if self.running and self.pump_on:
             target_flow = self.feed_valve * 1.5
         else:
@@ -54,7 +88,8 @@ class SimulationEngine:
         self.flow += (target_flow - self.flow) * 0.2 * dt
         heat = self.setpoint_temp if (self.running and self.heater_on) else 25.0
         self.temperature += (heat - self.temperature) * 0.05 * dt
-        self.pressure += (self.flow * 1.1 + 30 - self.pressure) * 0.1 * dt
+        self.pressure += (self.flow * 1.1 + 30 + self._pressure_bias - self.pressure) * 0.1 * dt
+        self._pressure_bias *= 0.97  # возмущение затухает со временем
         # уровень: приток минус кипение
         self.level += (self.flow * 0.05 - self.temperature * 0.012) * dt
         self.level = max(0.0, min(100.0, self.level))
