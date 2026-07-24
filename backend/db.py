@@ -64,6 +64,17 @@ class TelemetryRow(Base):
     alarms: Mapped[list] = mapped_column(JSON, default=list)
 
 
-async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def init_db(retries: int = 15, delay: float = 2.0) -> None:
+    """Создать таблицы. Ждём готовности БД (важно при старте в docker-compose)."""
+    import asyncio
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            return
+        except Exception as e:  # БД ещё поднимается — ждём и пробуем снова
+            last_err = e
+            print(f"[db] БД не готова (попытка {attempt}/{retries}): {e}")
+            await asyncio.sleep(delay)
+    raise RuntimeError(f"Не удалось подключиться к БД после {retries} попыток: {last_err}")
