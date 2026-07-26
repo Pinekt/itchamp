@@ -1,28 +1,52 @@
-# Локальный стек КТК ЭЛОУ-АВТ: приложение + PostgreSQL.
-# Запуск одной командой:  docker compose up --build
-# Открыть в браузере:     http://localhost:8000
+# Стек КТК ЭЛОУ-АВТ: тренажёр + PostgreSQL + pgAdmin.
+#
+#   docker compose up --build
+#
+#   тренажёр  → http://localhost:8000
+#   pgAdmin   → http://localhost:5050   (admin@ktk.local / admin)
+#   PostgreSQL→ localhost:5433, база ktk_eloyavt, пользователь ktk / ktk
+#
+# Порт 5433 снаружи выбран специально: не конфликтует с локально
+# установленным PostgreSQL на 5432.
 services:
-  db:
+  ktk-db:
     image: postgres:16
+    container_name: ktk-postgres
     environment:
       POSTGRES_USER: ktk
       POSTGRES_PASSWORD: ktk
-      POSTGRES_DB: ktk
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+      POSTGRES_DB: ktk_eloyavt
+    ports: ["5433:5432"]
+    volumes:
+      - ktk_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ktk -d ktk"]
+      test: ["CMD-SHELL", "pg_isready -U ktk -d ktk_eloyavt"]
       interval: 3s
       timeout: 3s
-      retries: 10
-  app:
+      retries: 15
+
+  ktk-app:
     build: .
+    container_name: ktk-trainer
     environment:
-      DATABASE_URL: postgresql+asyncpg://ktk:ktk@db:5432/ktk
+      DATABASE_URL: postgresql+asyncpg://ktk:ktk@ktk-db:5432/ktk_eloyavt
     ports: ["8000:8000"]
     depends_on:
-      db:
+      ktk-db:
         condition: service_healthy
     restart: on-failure
+
+  ktk-pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ktk-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ktk.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports: ["5050:80"]
+    depends_on:
+      ktk-db:
+        condition: service_healthy
+
 volumes:
-  pgdata:
+  ktk_pgdata:

@@ -19,22 +19,31 @@ class TrainingSession:
         self.active = False
         self.engine = SimulationEngine()
         self.ai = ErrorAnalyzer()
+        self._initial: dict | None = None
+        self._faults: list | None = None
 
-    def start(self, scenario_id: str) -> bool:
-        """Загрузить сценарий и начать тренировку. False — сценарий не найден."""
-        sc = get_scenario(scenario_id)
-        if sc is None:
-            return False
+    def start(self, scenario_id: str, initial: dict | None = None,
+              faults: list | None = None) -> bool:
+        """
+        Загрузить сценарий и начать тренировку.
+        initial/faults можно передать из БД; иначе берётся встроенный каталог.
+        """
+        if initial is None and faults is None:
+            sc = get_scenario(scenario_id)
+            if sc is None:
+                return False
+            initial, faults = sc.initial, sc.faults
         self.scenario_id = scenario_id
         self.engine = SimulationEngine()
-        self.engine.load_scenario(initial=sc.initial, faults=sc.faults)
+        self.engine.load_scenario(initial=initial, faults=faults)
+        self._initial, self._faults = initial, faults
         self.active = True
         return True
 
     def reset(self) -> None:
-        """Перезапустить текущий сценарий с начала."""
+        """Перезапустить текущий сценарий с начала (сохраняя загруженные параметры)."""
         if self.scenario_id:
-            self.start(self.scenario_id)
+            self.start(self.scenario_id, self._initial, self._faults)
 
     def stop(self) -> None:
         self.active = False

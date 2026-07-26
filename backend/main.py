@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from .models import ControlCommand, OperatorAction, WSMessage, WSMessageType
 from .session import TrainingSession
 from .scenarios import SCENARIOS
-from . import db, storage
+from . import db, storage, seed
 
 app = FastAPI(title="КТК ЭЛОУ-АВТ", version="0.2.0")
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
@@ -27,11 +27,20 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 @app.on_event("startup")
 async def _startup():
     await db.init_db()
+    await seed.seed()
 
 
 @app.get("/api/scenarios")
-def list_scenarios():
-    return [s.model_dump() for s in SCENARIOS]
+async def list_scenarios():
+    """Сценарии из БД (инструктор может добавлять свои)."""
+    rows = await storage.list_scenarios()
+    return rows if rows else [s.model_dump() for s in SCENARIOS]
+
+
+@app.get("/api/scenarios/{code}/reference")
+async def reference_steps(code: str):
+    """Эталонная последовательность шагов — основа для сравнения действий (ИИ)."""
+    return await storage.get_reference_steps(code)
 
 
 @app.get("/api/sessions")
@@ -42,6 +51,18 @@ async def sessions():
 @app.get("/api/sessions/{session_id}/journal")
 async def journal(session_id: str):
     return await storage.get_journal(session_id)
+
+
+@app.get("/api/sessions/{session_id}/errors")
+async def session_errors(session_id: str):
+    """Ошибки, выявленные ИИ в ходе тренировки."""
+    return await storage.get_errors(session_id)
+
+
+@app.get("/api/sessions/{session_id}/assessment")
+async def session_assessment(session_id: str):
+    """Оценка квалификации по итогам тренировки (создаётся при завершении)."""
+    return await storage.get_assessment(session_id) or {"detail": "оценка ещё не сформирована"}
 
 
 @app.get("/")
@@ -76,6 +97,7 @@ async def ws(websocket: WebSocket):
                         type=WSMessageType.FEEDBACK, payload=feedback.model_dump()).model_dump_json())
                     if sess.session_id:
                         await storage.save_telemetry(sess.session_id, state)
+                        await storage.save_error(sess.session_id, feedback)
                 await asyncio.sleep(1.0)
         except (WebSocketDisconnect, RuntimeError):
             pass
@@ -90,7 +112,10 @@ async def ws(websocket: WebSocket):
             if "session_action" in msg:
                 sa = msg["session_action"]
                 if sa == "start":
-                    if sess.start(msg.get("scenario", "startup")):
+                    code = msg.get("scenario", "startup")
+                    sc = await storage.get_scenario(code)
+                    ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
+                    if ok:
                         sess.session_id = await storage.create_session(
                             sess.scenario_id, sess.operator)
                         last_event_t = time.time()
@@ -100,6 +125,9 @@ async def ws(websocket: WebSocket):
                     sess.stop()
                     if sess.session_id:
                         await storage.end_session(sess.session_id)
+                        assessment = await storage.build_assessment(sess.session_id)
+                        await websocket.send_text(json.dumps(
+                            {"type": "assessment", "payload": assessment}, ensure_ascii=False))
                 continue
 
             # --- команда оператора ---
