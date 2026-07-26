@@ -77,6 +77,9 @@ docs/
   demo-week2.md     ← сценарий демонстрации команде
 scripts/
   create_local_db.sh ← создание базы в локальном PostgreSQL
+materials/          ← материалы организаторов: кейс, техрегламент ЭЛОУ-АВТ,
+                      макет презентации. НЕ в git (интеллектуальная
+                      собственность), скачивается из «CASE-IN Симулятор»
 docker-compose.yml  ← стек приложение + PostgreSQL
 Dockerfile          ← образ приложения
 requirements.txt    ← зависимости Python
