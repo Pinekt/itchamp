@@ -1,6 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
-SQLAlchemy==2.0.35
+# [asyncio] обязателен: тянет greenlet, без него async-движок SQLAlchemy падает.
+# На Linux/x86_64 greenlet ставился сам, на macOS (arm64) — нет, и сервер не стартовал.
+SQLAlchemy[asyncio]==2.0.35
 aiosqlite==0.20.0
 asyncpg==0.29.0
