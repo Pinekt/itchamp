@@ -67,9 +67,46 @@ t, action, target, value, reaction_ms — фиксация действия и �
 | full_name | str | ФИО для шапки интерфейса |
 | role | enum | operator / instructor / admin |
 
+## Разбор тренировки
+
+`GET /api/sessions/{id}/debrief` — всё, что нужно экрану разбора, одним
+ответом. Собрано вместе намеренно: раздельная загрузка четырьмя запросами
+давала рассинхронизацию (оценка приходила раньше журнала) и четыре проверки
+прав вместо одной.
+
+| Поле | Тип | Содержание |
+|---|---|---|
+| `session` | объект | сценарий (код, название, описание), обучаемый, `status`, `started_at`, `ended_at`, `duration_s` |
+| `journal` | OperatorAction[] | действия обучаемого по порядку, с `reaction_ms` |
+| `telemetry` | ParameterState[] | история параметров для графика (не более 5000 точек) |
+| `errors` | AIFeedback[] | полный журнал ошибок: запись на каждый такт, пока держится авария |
+| `error_episodes` | объект[] | те же ошибки, сведённые в эпизоды: `+ t_from, t_to, count` |
+| `assessment` | объект \| null | итоговая оценка; `null`, пока тренировка не завершена |
+| `reference` | ScenarioStep[] | **только инструктору и администратору**; оператору поля нет вовсе |
+
+`assessment.details` дополнительно содержит разбор по эталонным шагам:
+
+| Поле | Содержание |
+|---|---|
+| `steps` | по шагу: `description`, `window_s`, `critical`, `done`, `late`, `t` |
+| `steps_total` / `steps_done` / `steps_late` | сводка выполнения |
+| `penalties` | из чего сложился штраф, по видам нарушений |
+| `errors_by_class` | эпизоды ошибок по классам |
+| `error_records` | число записей в журнале ошибок (больше числа эпизодов) |
+| `pass_score` | порог сдачи, баллы |
+
+Оценка формируется один раз — при завершении тренировки, в том числе при
+обрыве связи (тогда `status = "aborted"`). Повторное завершение новой оценки
+не создаёт.
+
 ## Транспорт
 WebSocket `/ws`: сообщения `{type: state|feedback|action, payload: {...}}`.
-REST: `GET /api/scenarios`, `GET /api/sessions/{id}/journal`.
+По завершении тренировки сервер шлёт `{type: "assessment", payload: {...}}`
+с той же оценкой, что отдаёт REST, — интерфейс сразу показывает результат
+и ссылку на разбор.
+
+REST: `GET /api/scenarios`, `GET /api/sessions/{id}/journal`,
+`GET /api/sessions/{id}/telemetry`, `GET /api/sessions/{id}/debrief`.
 
 **Доступ.** Все запросы, кроме `POST /api/login` и `GET /login`, требуют
 действующего сеанса — токен передаётся в cookie `ktk_session`

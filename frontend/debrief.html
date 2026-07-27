@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КТК ЭЛОУ-АВТ — разбор тренировки</title>
+<style>
+  :root{--bg:#0f1420;--panel:#1a2130;--line:#2b3345;--txt:#e6ebf5;--muted:#8a94a8;
+        --accent:#5B2CE0;--ok:#1E7A3D;--warn:#c9821a;--err:#c0392b;
+        --sP:#e05c5c;--sT:#e0a35c;--sF:#5cb8e0;--sL:#7ee05c;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 18px;display:flex;
+         align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .wrap{display:grid;grid-template-columns:1fr 380px;gap:14px;padding:14px;align-items:start}
+  @media(max-width:1100px){.wrap{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+  .panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:9px 14px;
+         font-size:13px;cursor:pointer} button:hover{opacity:.9}
+  button.sec{background:#2b3345}
+  select{background:#10161f;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:7px;font-size:13px}
+  .user{font-size:12px;color:var(--muted)} .user b{color:var(--txt)}
+  .muted{color:var(--muted)}
+
+  /* --- шапка тренировки --- */
+  .meta{display:flex;flex-wrap:wrap;gap:18px;font-size:13px}
+  .meta div span{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+
+  /* --- итоговая оценка --- */
+  .score{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .score .big{font-size:52px;font-weight:700;line-height:1}
+  .verdict{font-size:13px;padding:5px 13px;border-radius:20px;font-weight:600}
+  .verdict.passed{background:var(--ok);color:#fff} .verdict.not_passed{background:var(--err);color:#fff}
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:9px;margin-top:14px}
+  .kpi div{background:#10161f;border:1px solid var(--line);border-radius:8px;padding:9px;text-align:center}
+  .kpi .v{font-size:19px;font-weight:700} .kpi .n{font-size:11px;color:var(--muted);margin-bottom:3px}
+  .pen{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7}
+  .pen b{color:var(--err)}
+
+  /* --- эталонные шаги --- */
+  .steps{list-style:none;margin:12px 0 0;padding:0;font-size:13px}
+  .steps li{display:flex;gap:9px;padding:7px 0;border-top:1px solid var(--line);align-items:baseline}
+  .steps .mark{width:17px;text-align:center;flex:none;font-weight:700}
+  .steps .ok{color:#28c76f} .steps .late{color:var(--warn)} .steps .miss{color:var(--err)}
+  .steps small{color:var(--muted)}
+
+  /* --- график --- */
+  .legend{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}
+  .legend button{background:#10161f;border:1px solid var(--line);color:var(--muted);
+                 padding:5px 10px;font-size:12px;border-radius:6px;display:flex;align-items:center;gap:6px}
+  .legend button.on{color:var(--txt)}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .chart{position:relative}
+  .chart svg{display:block;width:100%;height:auto}
+  #tip{position:absolute;pointer-events:none;background:#0b0f18;border:1px solid var(--line);
+       border-radius:7px;padding:8px 10px;font-size:12px;line-height:1.6;display:none;white-space:nowrap;z-index:5}
+  #tip b{color:var(--txt)}
+
+  /* --- таблицы --- */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;
+     letter-spacing:.04em;padding:0 8px 7px 0;border-bottom:1px solid var(--line)}
+  td{padding:7px 8px 7px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr:last-child td{border-bottom:0}
+  .scroll{max-height:330px;overflow:auto}
+  .sev{padding:2px 7px;border-radius:20px;font-size:11px;white-space:nowrap}
+  .sev.error{background:var(--err);color:#fff} .sev.warning{background:var(--warn);color:#fff}
+  .sev.info{background:#2b3345;color:var(--txt)}
+  .empty{color:var(--muted);font-size:13px;padding:8px 0}
+  [data-role]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>КТК ЭЛОУ-АВТ · разбор тренировки</h1>
+  <select id="sessSel" style="min-width:290px" onchange="openSession(this.value)"></select>
+  <span style="margin-left:auto"></span>
+  <span id="who" class="user">—</span>
+  <button class="sec" onclick="location.href='/'" style="padding:5px 11px;font-size:12px">Рабочее место</button>
+  <button class="sec" onclick="logout()" style="padding:5px 11px;font-size:12px">Выход</button>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <h2>Тренировка</h2>
+      <div id="meta" class="meta"><div class="empty">Выберите тренировку в списке сверху.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Телеметрия</h2>
+      <div class="legend" id="legend"></div>
+      <div class="chart">
+        <svg id="chart" viewBox="0 0 900 300" preserveAspectRatio="none"></svg>
+        <div id="tip"></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:8px">
+        Каждый параметр масштабируется по своему диапазону — иначе на одной оси
+        уровень в процентах не виден рядом с температурой в сотнях градусов.
+        Красные полосы — интервалы с активной аварией, штрихи снизу — действия оператора.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Журнал действий</h2>
+      <div class="scroll">
+        <table><thead><tr><th>t, c</th><th>Действие</th><th>Объект</th><th>Значение</th><th>Реакция</th></tr></thead>
+        <tbody id="journal"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Итоговая оценка</h2>
+      <div id="assessment"><div class="empty">—</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Найденные ошибки</h2>
+      <div class="scroll"><div id="errors"><div class="empty">—</div></div></div>
+    </div>
+
+    <div class="panel" data-role="instructor admin">
+      <h2>Эталонная последовательность</h2>
+      <div class="muted" style="font-size:11px;margin-bottom:8px">
+        Видна только инструктору и администратору.
+      </div>
+      <div class="scroll"><div id="reference"><div class="empty">—</div></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const ROLE_NAMES={operator:'оператор',instructor:'инструктор',admin:'администратор'};
+const ACTION_NAMES={start:'Пуск процесса',stop:'Останов',set_pump:'Насос',
+                    set_valve:'Клапан сырья',set_setpoint:'Уставка',ack_alarm:'Квитирование'};
+const VERDICTS={passed:'ЗАЧЁТ',not_passed:'НЕ СДАНО'};
+const STATUS_NAMES={active:'идёт',finished:'завершена',aborted:'прервана'};
+const PENALTY_NAMES={step_missed_critical:'пропущены критические шаги',
+                     step_missed:'пропущены шаги',step_late:'шаги с опозданием',
+                     error_critical:'критические ошибки',error:'прочие ошибки'};
+const SERIES=[
+  {key:'pressure',   name:'Давление',    unit:'кПа',  color:'var(--sP)'},
+  {key:'temperature',name:'Температура', unit:'°C',   color:'var(--sT)'},
+  {key:'flow',       name:'Расход',      unit:'м³/ч', color:'var(--sF)'},
+  {key:'level',      name:'Уровень',     unit:'%',    color:'var(--sL)'},
+];
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num=(v,d=1)=>v==null?'—':(+v).toFixed(d);
+
+let me=null, shown={}, data=null;
+SERIES.forEach(s=>shown[s.key]=true);
+
+async function api(url){
+  const r=await fetch(url);
+  if(r.status===401){location.href='/login'; throw new Error('нет сеанса');}
+  if(!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function logout(){ await fetch('/api/logout',{method:'POST'}); location.href='/login'; }
+
+async function loadMe(){
+  me=await api('/api/me');
+  $('who').innerHTML=`<b>${esc(me.full_name)}</b> · ${ROLE_NAMES[me.role]||me.role}`;
+  // снимаем атрибут, а не выставляем display: правило [data-role]{display:none}
+  // живёт в таблице стилей, и очистка инлайнового стиля его не перебивает
+  document.querySelectorAll('[data-role]').forEach(el=>{
+    if(el.dataset.role.split(' ').includes(me.role)) el.removeAttribute('data-role');
+  });
+}
+
+async function loadSessions(){
+  const list=await api('/api/sessions');
+  if(!list.length){
+    $('sessSel').innerHTML='<option>тренировок пока нет</option>';
+    return null;
+  }
+  // инструктор видит чужие тренировки — ему нужна фамилия в списке
+  $('sessSel').innerHTML=list.map(s=>{
+    const when=(s.started_at||'').slice(0,19).replace('T',' ');
+    const who=me.role==='operator'?'':` · ${esc(s.operator)}`;
+    return `<option value="${s.id}">${when}${who} · ${esc(s.scenario_code)} · ${STATUS_NAMES[s.status]||s.status}</option>`;
+  }).join('');
+  const wanted=new URLSearchParams(location.search).get('session');
+  const pick=(wanted&&list.some(s=>s.id===wanted))?wanted:list[0].id;
+  $('sessSel').value=pick;
+  return pick;
+}
+
+async function openSession(id){
+  if(!id) return;
+  history.replaceState(null,'','/debrief?session='+encodeURIComponent(id));
+  data=await api(`/api/sessions/${id}/debrief`);
+  renderMeta(); renderAssessment(); renderChart(); renderJournal();
+  renderErrors(); renderReference();
+}
+
+function renderMeta(){
+  const s=data.session;
+  // модельное и реальное время совпадают при штатном такте в 1 с, но
+  // расходятся, если тренировку прогоняли ускоренно — показываем оба
+  const modelT=data.telemetry.length?data.telemetry[data.telemetry.length-1].t:null;
+  const cells=[
+    ['Сценарий', esc(s.scenario_name)],
+    ['Обучаемый', esc(s.operator)],
+    ['Начало', (s.started_at||'').slice(0,19).replace('T',' ')],
+    ['Модельное время', modelT!=null?num(modelT,0)+' с':'—'],
+    ['По часам', s.duration_s!=null?num(s.duration_s,0)+' с':'—'],
+    ['Состояние', STATUS_NAMES[s.status]||s.status],
+    ['Точек телеметрии', data.telemetry.length],
+  ];
+  $('meta').innerHTML=cells.map(([n,v])=>`<div><span>${n}</span>${v}</div>`).join('')+
+    (s.scenario_description?`<div style="flex-basis:100%"><span>Задание</span>${esc(s.scenario_description)}</div>`:'');
+}
+
+function renderAssessment(){
+  const a=data.assessment;
+  if(!a){
+    $('assessment').innerHTML='<div class="empty">Оценка ещё не сформирована — '+
+      'она рассчитывается при завершении тренировки.</div>';
+    return;
+  }
+  const d=a.details||{};
+  // в баллах считаются эпизоды: длящаяся авария — одна ошибка, а не запись на такт
+  const kpi=[
+    ['Ошибок', a.errors_count],
+    ['Критических', a.critical_errors],
+    ['Ср. реакция', a.avg_reaction_ms!=null?a.avg_reaction_ms+' мс':'—'],
+    ['Шагов', `${d.steps_done??0} / ${d.steps_total??0}`],
+    ['Действий', d.actions??0],
+    ['С опозданием', d.steps_late??0],
+  ];
+  const pen=Object.entries(d.penalties||{}).filter(([,v])=>v>0)
+    .map(([k,v])=>`${PENALTY_NAMES[k]||k}: <b>−${num(v,0)}</b>`).join('<br>');
+  $('assessment').innerHTML=`
+    <div class="score">
+      <div class="big" style="color:${a.verdict==='passed'?'#28c76f':'var(--err)'}">${num(a.total_score,0)}</div>
+      <div>
+        <div class="verdict ${a.verdict}">${VERDICTS[a.verdict]||a.verdict}</div>
+        <div class="muted" style="font-size:12px;margin-top:6px">из 100, порог ${num(d.pass_score??70,0)}</div>
+      </div>
+    </div>
+    <div class="kpi">${kpi.map(([n,v])=>`<div><div class="n">${n}</div><div class="v">${v}</div></div>`).join('')}</div>
+    ${pen?`<div class="pen"><u>Из чего сложился штраф</u><br>${pen}</div>`:''}
+    ${renderSteps(d.steps)}`;
+}
+
+function renderSteps(steps){
+  if(!steps||!steps.length) return '';
+  const li=steps.map(s=>{
+    const cls=!s.done?'miss':(s.late?'late':'ok');
+    const mark=!s.done?'✗':(s.late?'⏱':'✓');
+    const when=s.done?`выполнено на t=${num(s.t,0)} c (норматив ${num(s.window_s,0)} c)`
+                     :`не выполнено (норматив ${num(s.window_s,0)} c)`;
+    return `<li><span class="mark ${cls}">${mark}</span><span>${esc(s.description)}
+            ${s.critical?'<b style="color:var(--err)">·&nbsp;критический</b>':''}
+            <br><small>${when}</small></span></li>`;
+  }).join('');
+  return `<div style="margin-top:16px"><h2 style="margin-bottom:0">Эталонные шаги</h2><ul class="steps">${li}</ul></div>`;
+}
+
+// ---------------------------------------------------------------- график
+const PAD={l:46,r:14,t:14,b:30}, W=900, H=300;
+
+function renderChart(){
+  const tel=data.telemetry, svg=$('chart');
+  $('legend').innerHTML=SERIES.map(s=>{
+    const vals=tel.map(p=>p[s.key]);
+    const rng=vals.length?` ${num(Math.min(...vals))}…${num(Math.max(...vals))} ${s.unit}`:'';
+    return `<button class="${shown[s.key]?'on':''}" onclick="toggle('${s.key}')">
+              <i style="background:${s.color};opacity:${shown[s.key]?1:.3}"></i>${s.name}<span class="muted">${rng}</span>
+            </button>`;
+  }).join('');
+
+  if(!tel.length){
+    svg.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="#8a94a8">
+                     Телеметрия не записана</text>`;
+    return;
+  }
+  const t0=tel[0].t, t1=tel[tel.length-1].t, span=(t1-t0)||1;
+  const x=t=>PAD.l+(t-t0)/span*(W-PAD.l-PAD.r);
+  const plotH=H-PAD.t-PAD.b;
+  let out='';
+
+  // полосы аварий — сначала, чтобы линии рисовались поверх
+  let from=null;
+  tel.forEach((p,i)=>{
+    const on=(p.alarms||[]).length>0;
+    if(on&&from===null) from=p.t;
+    if((!on||i===tel.length-1)&&from!==null){
+      out+=`<rect x="${x(from).toFixed(1)}" y="${PAD.t}" width="${Math.max(1,x(p.t)-x(from)).toFixed(1)}"
+             height="${plotH}" fill="#c0392b" opacity=".14"/>`;
+      from=null;
+    }
+  });
+
+  // сетка по времени
+  for(let k=0;k<=5;k++){
+    const t=t0+span*k/5, px=x(t).toFixed(1);
+    out+=`<line x1="${px}" y1="${PAD.t}" x2="${px}" y2="${PAD.t+plotH}" stroke="#2b3345"/>`+
+         `<text x="${px}" y="${H-10}" text-anchor="middle" fill="#8a94a8" font-size="11">${num(t,0)}</text>`;
+  }
+  out+=`<text x="10" y="${PAD.t+10}" fill="#8a94a8" font-size="11">макс</text>`+
+       `<text x="10" y="${PAD.t+plotH}" fill="#8a94a8" font-size="11">мин</text>`+
+       `<line x1="${PAD.l}" y1="${PAD.t+plotH}" x2="${W-PAD.r}" y2="${PAD.t+plotH}" stroke="#2b3345"/>`;
+
+  // сами кривые: у каждой свой диапазон
+  SERIES.forEach(s=>{
+    if(!shown[s.key]) return;
+    const vals=tel.map(p=>p[s.key]);
+    let lo=Math.min(...vals), hi=Math.max(...vals);
+    if(hi-lo<1e-9){lo-=1;hi+=1;}                    // константа — рисуем по центру
+    const y=v=>PAD.t+plotH-(v-lo)/(hi-lo)*plotH;
+    const d=tel.map((p,i)=>`${i?'L':'M'}${x(p.t).toFixed(1)} ${y(p[s.key]).toFixed(1)}`).join(' ');
+    out+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.8"
+           stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  });
+
+  // отметки действий оператора
+  (data.journal||[]).forEach(a=>{
+    if(a.t<t0||a.t>t1) return;
+    const px=x(a.t).toFixed(1);
+    out+=`<line x1="${px}" y1="${PAD.t+plotH-9}" x2="${px}" y2="${PAD.t+plotH}"
+           stroke="#e6ebf5" stroke-width="1.5" opacity=".75"/>`;
+  });
+
+  out+=`<line id="cross" x1="0" y1="${PAD.t}" x2="0" y2="${PAD.t+plotH}"
+         stroke="#e6ebf5" opacity="0" stroke-dasharray="3 3"/>`;
+  svg.innerHTML=out;
+  svg.onmousemove=e=>hover(e,tel,t0,span);
+  svg.onmouseleave=()=>{$('tip').style.display='none';
+                        svg.querySelector('#cross').setAttribute('opacity','0');};
+}
+
+function toggle(key){ shown[key]=!shown[key]; renderChart(); }
+
+function hover(e,tel,t0,span){
+  const svg=$('chart'), box=svg.getBoundingClientRect();
+  const vx=(e.clientX-box.left)/box.width*W;                 // экран → координаты viewBox
+  const frac=(vx-PAD.l)/(W-PAD.l-PAD.r);
+  if(frac<0||frac>1){$('tip').style.display='none';return;}
+  const t=t0+frac*span;
+  const p=tel.reduce((a,b)=>Math.abs(b.t-t)<Math.abs(a.t-t)?b:a);
+  const cross=svg.querySelector('#cross'), px=PAD.l+(p.t-t0)/span*(W-PAD.l-PAD.r);
+  cross.setAttribute('x1',px); cross.setAttribute('x2',px); cross.setAttribute('opacity','.5');
+
+  const acts=(data.journal||[]).filter(a=>Math.abs(a.t-p.t)<1e-6);
+  const tip=$('tip');
+  tip.innerHTML=`<b>t = ${num(p.t,0)} c</b><br>`+
+    SERIES.map(s=>`<span style="color:${s.color}">■</span> ${s.name}: <b>${num(p[s.key])}</b> ${s.unit}`).join('<br>')+
+    ((p.alarms||[]).length?`<br><span style="color:var(--err)">⚠ ${p.alarms.join(', ')}</span>`:'')+
+    (acts.length?`<br><span class="muted">${acts.map(a=>ACTION_NAMES[a.action]||a.action).join(', ')}</span>`:'');
+  tip.style.display='block';
+  const left=(px/W)*box.width;
+  tip.style.left=Math.min(left+12, box.width-tip.offsetWidth-8)+'px';
+  tip.style.top='18px';
+}
+
+// ---------------------------------------------------------------- таблицы
+function renderJournal(){
+  const rows=data.journal||[];
+  $('journal').innerHTML=rows.length?rows.map(a=>`<tr>
+      <td>${num(a.t,0)}</td>
+      <td>${esc(ACTION_NAMES[a.action]||a.action)}</td>
+      <td class="muted">${esc(a.target||'—')}</td>
+      <td>${a.value!=null?num(a.value):'—'}</td>
+      <td class="muted">${a.reaction_ms!=null?a.reaction_ms+' мс':'—'}</td></tr>`).join('')
+    :'<tr><td colspan="5" class="empty">Действий не записано.</td></tr>';
+}
+
+function renderErrors(){
+  // показываем эпизоды: одна длящаяся авария — одна строка, а не запись на такт
+  const rows=data.error_episodes||data.errors||[];
+  if(!rows.length){
+    $('errors').innerHTML='<div class="empty">Ошибок не выявлено.</div>';
+    return;
+  }
+  $('errors').innerHTML=rows.map(e=>{
+    const from=e.t_from!=null?e.t_from:e.t, to=e.t_to!=null?e.t_to:e.t;
+    const when=from===to?`t=${num(from,0)} c`:`t=${num(from,0)}…${num(to,0)} c`;
+    const many=e.count>1?` · ${e.count} замеров`:'';
+    return `
+    <div style="padding:9px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;gap:8px;align-items:center;font-size:12px">
+        <span class="sev ${esc(e.severity)}">${esc(e.severity)}</span>
+        <b>${esc(e.error_class)}</b>
+        <span class="muted" style="margin-left:auto">${when}${many}</span>
+      </div>
+      <div style="font-size:12px;margin-top:5px">${esc(e.message)}</div>
+      ${e.recommendation?`<div class="muted" style="font-size:12px;margin-top:3px">
+        Рекомендация: ${esc(e.recommendation)}</div>`:''}
+      <div class="muted" style="font-size:11px;margin-top:3px">
+        ${esc(e.location||'—')}${e.risk_score!=null?` · риск ${Math.round(e.risk_score*100)}%`:''}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderReference(){
+  const rows=data.reference;                    // приходит только инструктору и админу
+  if(!rows) return;
+  $('reference').innerHTML=rows.length?`<table>
+    <thead><tr><th>№</th><th>Шаг</th><th>Норматив</th></tr></thead><tbody>${
+    rows.map(s=>`<tr><td>${s.order_no}</td>
+      <td>${esc(s.description)}${s.critical?'<br><span class="muted" style="color:var(--err)">критический</span>':''}
+          <br><span class="muted">${esc(s.expected_action)}${s.expected_target?' · '+esc(s.expected_target):''}</span></td>
+      <td>${num(s.window_s,0)} c</td></tr>`).join('')}</tbody></table>`
+    :'<div class="empty">Для сценария не задана эталонная последовательность.</div>';
+}
+
+loadMe().then(loadSessions).then(id=>{ if(id) openSession(id); })
+        .catch(e=>console.error(e));
+</script>
+</body>
+</html>

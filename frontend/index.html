@@ -50,6 +50,7 @@
   <span id="run" class="badge off">ОСТАНОВ</span>
   <span style="margin-left:auto;color:var(--muted);font-size:12px">t = <b id="clock">0</b> c</span>
   <span id="who" class="user" title="Текущий пользователь">—</span>
+  <button class="sec" onclick="location.href='/debrief'" style="padding:5px 11px;font-size:12px">Разбор</button>
   <button class="sec" id="logout" onclick="logout()" style="padding:5px 11px;font-size:12px">Выход</button>
 </header>
 
@@ -139,9 +140,11 @@ async function loadMe(){
   if(!r.ok){location.href='/login'; return;}
   me=await r.json();
   $('who').innerHTML=`<b>${me.full_name}</b> · ${ROLE_NAMES[me.role]||me.role}`;
-  // элементы с data-role показываем только подходящей роли
+  // элементы с data-role показываем только подходящей роли. Снимаем атрибут,
+  // а не выставляем display: правило [data-role]{display:none} задано в таблице
+  // стилей, и очистка инлайнового стиля его не перебивает
   document.querySelectorAll('[data-role]').forEach(el=>{
-    if(el.dataset.role.split(' ').includes(me.role)) el.style.display='';
+    if(el.dataset.role.split(' ').includes(me.role)) el.removeAttribute('data-role');
   });
 }
 async function logout(){
@@ -162,8 +165,20 @@ function connect(){
     if(m.type==='state')   renderState(m.payload);
     if(m.type==='feedback')renderFeed(m.payload);
     if(m.type==='action')  logAction(m.payload);
+    if(m.type==='assessment') showAssessment(m.payload);
     if(m.type==='error')   $('feed').textContent=m.payload.detail;
   };
+}
+// тренировка завершена — сразу зовём на разбор, пока всё свежо
+function showAssessment(a){
+  const el=$('feed');
+  el.className='feed '+(a.verdict==='passed'?'info':'error');
+  el.innerHTML=`<b>Тренировка завершена: ${a.total_score} из 100 — `+
+    `${a.verdict==='passed'?'зачёт':'не сдано'}</b><br>`+
+    `ошибок ${a.errors_count} (критических ${a.critical_errors})`+
+    (a.avg_reaction_ms!=null?`, средняя реакция ${a.avg_reaction_ms} мс`:'')+
+    `<br><a href="/debrief?session=${encodeURIComponent(a.session_id)}"
+        style="color:#8ea2ff">Открыть разбор тренировки →</a>`;
 }
 function cmd(action,target=null,value=null){
   if(ws&&ws.readyState===1) ws.send(JSON.stringify({action,target,value}));

@@ -21,6 +21,9 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB}"
 os.environ["KTK_SECRET_KEY"] = "test-secret-key-длиной-не-меньше-32-байт-для-HS256"
 os.environ["KTK_MAX_FAILED_ATTEMPTS"] = "3"     # чтобы тест блокировки был короче
 os.environ["KTK_LOCKOUT_S"] = "60"
+# такт симуляции — 50 мс вместо секунды: тесты, которым нужно несколько тактов
+# телеметрии, иначе ждали бы реальные секунды на каждый шаг
+os.environ["KTK_TICK_PERIOD_S"] = "0.05"
 
 from fastapi.testclient import TestClient          # noqa: E402
 from backend.main import app                       # noqa: E402
