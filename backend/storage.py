@@ -18,6 +18,36 @@ async def get_user(login: str) -> dict | None:
                                            full_name=u.full_name, role=u.role)
 
 
+async def get_user_for_auth(login: str) -> dict | None:
+    """
+    Пользователь вместе с хешем пароля и признаком активности — только для
+    процедуры входа. В остальных местах используем get_user/get_user_by_id,
+    чтобы хеш не растекался по коду.
+    """
+    async with Session() as s:
+        u = (await s.execute(select(User).where(User.login == login))).scalar_one_or_none()
+        return None if u is None else dict(id=u.id, login=u.login,
+                                           full_name=u.full_name, role=u.role,
+                                           password_hash=u.password_hash, active=u.active)
+
+
+async def get_user_by_id(user_id: int) -> dict | None:
+    """Пользователь по id — проверка, что владелец токена ещё существует и активен."""
+    async with Session() as s:
+        u = (await s.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        return None if u is None else dict(id=u.id, login=u.login,
+                                           full_name=u.full_name, role=u.role,
+                                           active=u.active)
+
+
+async def set_password_hash(user_id: int, password_hash: str) -> None:
+    """Обновить хеш пароля (перевод старых SHA-256 на Argon2id при входе)."""
+    async with Session() as s:
+        await s.execute(update(User).where(User.id == user_id)
+                        .values(password_hash=password_hash))
+        await s.commit()
+
+
 async def audit(user_id: int | None, event: str, details: dict | None = None,
                 ip: str | None = None) -> None:
     async with Session() as s:
@@ -60,30 +90,51 @@ async def get_reference_steps(code: str) -> list[dict]:
 # ----------------------------------------------------------------------- сессии
 
 async def create_session(scenario_code: str, operator: str = "unknown",
-                         user_id: int | None = None) -> str:
+                         user_id: int | None = None, ip: str | None = None) -> str:
     sid = str(uuid.uuid4())
     async with Session() as s:
         s.add(TrainingSession(id=sid, scenario_code=scenario_code,
                               operator=operator, user_id=user_id))
         await s.commit()
-    await audit(user_id, "session_start", {"session": sid, "scenario": scenario_code})
+    await audit(user_id, "session_start", {"session": sid, "scenario": scenario_code}, ip=ip)
     return sid
 
 
-async def end_session(session_id: str, status: str = "finished") -> None:
+async def end_session(session_id: str, status: str = "finished",
+                      user_id: int | None = None, ip: str | None = None) -> None:
     async with Session() as s:
         await s.execute(update(TrainingSession).where(TrainingSession.id == session_id)
                         .values(ended_at=datetime.now(timezone.utc), status=status))
         await s.commit()
-    await audit(None, "session_end", {"session": session_id, "status": status})
+    await audit(user_id, "session_end", {"session": session_id, "status": status}, ip=ip)
 
 
-async def list_sessions(limit: int = 50) -> list[dict]:
+async def list_sessions(limit: int = 50, user_id: int | None = None) -> list[dict]:
+    """
+    Список тренировок. Если задан user_id — только тренировки этого
+    пользователя (оператор видит лишь свои; инструктор и админ — все).
+    """
     async with Session() as s:
-        rows = (await s.execute(select(TrainingSession)
-                .order_by(TrainingSession.started_at.desc()).limit(limit))).scalars().all()
+        q = select(TrainingSession).order_by(TrainingSession.started_at.desc()).limit(limit)
+        if user_id is not None:
+            q = q.where(TrainingSession.user_id == user_id)
+        rows = (await s.execute(q)).scalars().all()
         return [dict(id=r.id, scenario_code=r.scenario_code, operator=r.operator,
-                     status=r.status, started_at=str(r.started_at)) for r in rows]
+                     status=r.status, started_at=str(r.started_at),
+                     user_id=r.user_id) for r in rows]
+
+
+async def get_session_owner(session_id: str) -> dict | None:
+    """
+    Владелец тренировки — для проверки прав доступа к журналу, ошибкам
+    и оценке. None, если такой тренировки нет.
+    """
+    async with Session() as s:
+        r = (await s.execute(select(TrainingSession)
+             .where(TrainingSession.id == session_id))).scalar_one_or_none()
+        return None if r is None else dict(id=r.id, user_id=r.user_id,
+                                           operator=r.operator,
+                                           scenario_code=r.scenario_code)
 
 
 # ------------------------------------------------------- действия, телеметрия, ИИ

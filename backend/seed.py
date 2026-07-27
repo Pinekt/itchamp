@@ -3,21 +3,26 @@
 Выполняется автоматически при старте, если таблицы пустые (идемпотентно).
 """
 from __future__ import annotations
-import hashlib
+import os
 from sqlalchemy import select, func
 
 from .db import Session, User, Scenario, ScenarioStep
+from .security import hash_password
 
 
-def _hash(p: str) -> str:
-    # Учебная заглушка. В проде — bcrypt/argon2 (задача по ИБ, Элтон/Михаил).
-    return hashlib.sha256(p.encode()).hexdigest()
+def _pwd(login: str) -> str:
+    """
+    Пароль учётной записи. По умолчанию совпадает с логином — это удобно на
+    демонстрации, но небезопасно, поэтому переопределяется переменными
+    окружения KTK_PASSWORD_OPERATOR / _INSTRUCTOR / _ADMIN.
+    """
+    return os.getenv(f"KTK_PASSWORD_{login.upper()}", login)
 
 
 USERS = [
-    dict(login="operator", full_name="Оператор-стажёр", role="operator", pwd="operator"),
-    dict(login="instructor", full_name="Инструктор", role="instructor", pwd="instructor"),
-    dict(login="admin", full_name="Администратор КТК", role="admin", pwd="admin"),
+    dict(login="operator", full_name="Оператор-стажёр", role="operator"),
+    dict(login="instructor", full_name="Инструктор", role="instructor"),
+    dict(login="admin", full_name="Администратор КТК", role="admin"),
 ]
 
 SCENARIOS = [
@@ -63,9 +68,10 @@ async def seed() -> None:
         if (await s.execute(select(func.count(User.id)))).scalar() == 0:
             for u in USERS:
                 s.add(User(login=u["login"], full_name=u["full_name"],
-                           role=u["role"], password_hash=_hash(u["pwd"])))
+                           role=u["role"], password_hash=hash_password(_pwd(u["login"]))))
             await s.commit()
-            print("[seed] пользователи созданы:", ", ".join(u["login"] for u in USERS))
+            print("[seed] пользователи созданы (пароли Argon2id):",
+                  ", ".join(u["login"] for u in USERS))
 
         if (await s.execute(select(func.count(Scenario.id)))).scalar() == 0:
             for sc in SCENARIOS:

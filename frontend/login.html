@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КТК ЭЛОУ-АВТ — вход в систему</title>
+<style>
+  :root{--bg:#0f1420;--panel:#1a2130;--line:#2b3345;--txt:#e6ebf5;--muted:#8a94a8;
+        --accent:#5B2CE0;--err:#c0392b;}
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+       font-family:Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:28px 30px;width:360px}
+  h1{font-size:17px;margin:0 0 4px}
+  .sub{font-size:12px;color:var(--muted);margin-bottom:22px}
+  label{display:block;font-size:12px;color:var(--muted);margin:14px 0 5px}
+  input{width:100%;background:#10161f;color:var(--txt);border:1px solid var(--line);
+        border-radius:7px;padding:10px 12px;font-size:14px}
+  input:focus{outline:none;border-color:var(--accent)}
+  button{width:100%;margin-top:22px;background:var(--accent);color:#fff;border:0;
+         border-radius:7px;padding:11px;font-size:14px;cursor:pointer}
+  button:hover{opacity:.9}
+  button:disabled{opacity:.5;cursor:default}
+  .err{margin-top:14px;font-size:13px;color:#ff8b7d;min-height:18px}
+  .hint{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);
+        font-size:11px;color:var(--muted);line-height:1.6}
+</style>
+</head>
+<body>
+<form class="card" id="form">
+  <h1>КТК ЭЛОУ-АВТ</h1>
+  <div class="sub">Компьютерный тренажёрный комплекс. Вход в систему.</div>
+
+  <label for="login">Логин</label>
+  <input id="login" name="login" autocomplete="username" autofocus required>
+
+  <label for="password">Пароль</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+  <button id="submit" type="submit">Войти</button>
+  <div class="err" id="err"></div>
+
+  <div class="hint">
+    Учебный стенд: <b>operator</b> · <b>instructor</b> · <b>admin</b>,
+    пароль совпадает с логином, если не задан переменными окружения.
+  </div>
+</form>
+
+<script>
+const $ = id => document.getElementById(id);
+
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('err').textContent = '';
+  $('submit').disabled = true;
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({login: $('login').value, password: $('password').value}),
+    });
+    if (r.ok) {
+      location.href = '/';                       // cookie сеанса уже установлена
+      return;
+    }
+    const data = await r.json().catch(() => ({}));
+    $('err').textContent = data.detail || 'Не удалось войти';
+  } catch (_) {
+    $('err').textContent = 'Сервер недоступен';
+  } finally {
+    $('submit').disabled = false;
+  }
+});
+</script>
+</body>
+</html>

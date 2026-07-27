@@ -30,6 +30,12 @@ services:
     container_name: ktk-trainer
     environment:
       DATABASE_URL: postgresql+asyncpg://ktk:ktk@ktk-db:5432/ktk_eloyavt
+      # Ключ подписи токенов сеанса. На стенде берётся значение по умолчанию,
+      # для эксплуатации задать свой: положить KTK_SECRET_KEY в файл .env
+      # рядом с docker-compose.yml (в git его не коммитим).
+      KTK_SECRET_KEY: ${KTK_SECRET_KEY:-ktk-eloyavt-demo-key-заменить-в-эксплуатации}
+      # 1 — отдавать cookie сеанса только по HTTPS (включить за TLS-прокси).
+      KTK_COOKIE_SECURE: ${KTK_COOKIE_SECURE:-0}
     ports: ["8000:8000"]
     depends_on:
       ktk-db:

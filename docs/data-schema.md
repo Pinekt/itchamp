@@ -34,14 +34,47 @@ users ──< audit_log
 
 ## Начальные данные (создаются автоматически)
 
-- Пользователи: `operator`, `instructor`, `admin` (пароль = логин, учебная заглушка —
-  на неделе 4 заменить на bcrypt/argon2, задача по ИБ).
+- Пользователи: `operator`, `instructor`, `admin`. Пароль по умолчанию равен
+  логину и переопределяется переменными `KTK_PASSWORD_OPERATOR` и т. п.
+  Хранится **хеш Argon2id** (`users.password_hash`, вид `$argon2id$v=19$...`);
+  старые SHA-256-хеши распознаются и автоматически переводятся в Argon2id
+  при первом успешном входе.
 - Сценарии: `startup` (пуск), `pump_trip` (отказ насоса), `pressure_alarm` (рост давления)
   — с эталонными шагами для каждого.
+
+## События журнала аудита
+
+`audit_log.event` — справочник значений (аргумент по критерию ИБ):
+
+| Событие | Когда возникает | Что в `details` |
+|---|---|---|
+| `login_success` | успешный вход | логин, роль, User-Agent |
+| `login_failed` | неверный пароль или логин | логин, номер попытки, User-Agent |
+| `login_blocked` | сработала защита от подбора | логин, сколько секунд ждать |
+| `logout` | выход из системы | логин |
+| `access_denied` | не хватило прав | путь запроса, роль, что требовалось |
+| `password_rehashed` | пароль переведён на Argon2id | алгоритм |
+| `session_start` | начата тренировка | id тренировки, сценарий |
+| `session_end` | тренировка завершена | id тренировки, статус |
+
+У всех событий заполняются `user_id` (кроме блокировки до опознания
+пользователя) и `ip` — с учётом заголовка `X-Forwarded-For`, если
+приложение стоит за обратным прокси.
 
 ## Полезные запросы
 
 ```sql
+-- кто и откуда входил в систему за последние сутки
+SELECT a.created_at, u.login, a.event, a.ip
+FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+WHERE a.event IN ('login_success','login_failed','login_blocked')
+ORDER BY a.created_at DESC;
+
+-- попытки доступа к чужим данным
+SELECT u.login, a.details, a.ip, a.created_at
+FROM audit_log a JOIN users u ON u.id = a.user_id
+WHERE a.event = 'access_denied' ORDER BY a.created_at DESC;
+
 -- последние тренировки с оценками
 SELECT s.scenario_code, s.operator, a.total_score, a.verdict, a.errors_count
 FROM training_sessions s LEFT JOIN assessments a ON a.session_id = s.id

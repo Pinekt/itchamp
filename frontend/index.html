@@ -38,6 +38,9 @@
   .journal div{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
   .journal b{color:var(--txt)}
   svg text{fill:var(--txt);font-size:11px}
+  .user{font-size:12px;color:var(--muted)} .user b{color:var(--txt)}
+  /* элементы только для инструктора/администратора — показываются по роли */
+  [data-role]{display:none}
 </style>
 </head>
 <body>
@@ -46,6 +49,8 @@
   <span id="conn" class="badge">нет связи</span>
   <span id="run" class="badge off">ОСТАНОВ</span>
   <span style="margin-left:auto;color:var(--muted);font-size:12px">t = <b id="clock">0</b> c</span>
+  <span id="who" class="user" title="Текущий пользователь">—</span>
+  <button class="sec" id="logout" onclick="logout()" style="padding:5px 11px;font-size:12px">Выход</button>
 </header>
 
 <div class="wrap">
@@ -125,15 +130,39 @@
 
 <script>
 const $=id=>document.getElementById(id);
-let ws;
+const ROLE_NAMES={operator:'оператор',instructor:'инструктор',admin:'администратор'};
+let ws, me=null;
+
+// --- текущий пользователь: кто вошёл и что ему показывать ---
+async function loadMe(){
+  const r=await fetch('/api/me');
+  if(!r.ok){location.href='/login'; return;}
+  me=await r.json();
+  $('who').innerHTML=`<b>${me.full_name}</b> · ${ROLE_NAMES[me.role]||me.role}`;
+  // элементы с data-role показываем только подходящей роли
+  document.querySelectorAll('[data-role]').forEach(el=>{
+    if(el.dataset.role.split(' ').includes(me.role)) el.style.display='';
+  });
+}
+async function logout(){
+  await fetch('/api/logout',{method:'POST'});
+  location.href='/login';
+}
+
 function connect(){
-  ws=new WebSocket(`ws://${location.host}/ws`);
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen =()=>{$('conn').textContent='на связи';$('conn').className='badge on';};
-  ws.onclose=()=>{$('conn').textContent='нет связи';$('conn').className='badge';setTimeout(connect,1500);};
+  ws.onclose=e=>{
+    $('conn').textContent='нет связи';$('conn').className='badge';
+    if(e.code===4401){location.href='/login'; return;}   // сеанс истёк
+    setTimeout(connect,1500);
+  };
   ws.onmessage=e=>{const m=JSON.parse(e.data);
     if(m.type==='state')   renderState(m.payload);
     if(m.type==='feedback')renderFeed(m.payload);
     if(m.type==='action')  logAction(m.payload);
+    if(m.type==='error')   $('feed').textContent=m.payload.detail;
   };
 }
 function cmd(action,target=null,value=null){
@@ -144,10 +173,11 @@ function sess(session_action,scenario=null){
   if(session_action==='start') $('journal').innerHTML='';
 }
 async function loadScenarios(){
-  const r=await fetch('/api/scenarios'); const list=await r.json();
+  const r=await fetch('/api/scenarios');
+  if(!r.ok){location.href='/login'; return;}
+  const list=await r.json();
   $('scenSel').innerHTML=list.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
 }
-loadScenarios();
 function renderState(s){
   $('clock').textContent=s.t;
   $('vP').textContent=s.pressure; $('vT').textContent=s.temperature;
@@ -176,7 +206,8 @@ function logAction(a){
               `${a.reaction_ms!=null?` · реакция ${a.reaction_ms} мс`:''}`;
   $('journal').prepend(d);
 }
-connect();
+// вход обязателен: сначала выясняем, кто мы, потом поднимаем канал
+loadMe().then(loadScenarios).then(connect);
 </script>
 </body>
 </html>

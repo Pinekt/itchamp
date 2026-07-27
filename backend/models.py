@@ -106,3 +106,29 @@ class WSMessageType(str, Enum):
 class WSMessage(BaseModel):
     type: WSMessageType
     payload: dict
+
+
+# ---------- Аутентификация и роли ----------
+# ВНИМАНИЕ: это НЕ контракт симуляции. Схемы ниже касаются только входа в
+# систему и разграничения доступа; ParameterState / ControlCommand /
+# AIFeedback / OperatorAction они не затрагивают, переписывать engine.py,
+# ai_module.py и frontend из-за них не нужно.
+
+class Role(str, Enum):
+    OPERATOR = "operator"      # обучаемый: своя тренировка, свои результаты
+    INSTRUCTOR = "instructor"  # + чужие тренировки, эталон, разбор
+    ADMIN = "admin"            # + пользователи и сценарии
+
+
+class LoginRequest(BaseModel):
+    """Запрос на вход в систему."""
+    login: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class UserInfo(BaseModel):
+    """Сведения о текущем пользователе (ответ /api/me и /api/login)."""
+    id: int
+    login: str
+    full_name: str
+    role: Role
