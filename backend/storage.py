@@ -55,6 +55,80 @@ async def audit(user_id: int | None, event: str, details: dict | None = None,
         await s.commit()
 
 
+# ------------------------------------------------------------ администрирование
+
+def _user_row(u: User) -> dict:
+    """Учётная запись наружу — без хеша пароля."""
+    return dict(id=u.id, login=u.login, full_name=u.full_name, role=u.role,
+                active=u.active, created_at=str(u.created_at))
+
+
+async def list_users() -> list[dict]:
+    async with Session() as s:
+        rows = (await s.execute(select(User).order_by(User.id))).scalars().all()
+        return [_user_row(u) for u in rows]
+
+
+async def create_user(login: str, full_name: str, role: str,
+                      password_hash: str) -> dict | None:
+    """Завести учётную запись. None — если логин уже занят."""
+    async with Session() as s:
+        exists = (await s.execute(select(User).where(User.login == login))).scalar_one_or_none()
+        if exists is not None:
+            return None
+        u = User(login=login, full_name=full_name, role=role,
+                 password_hash=password_hash, active=True)
+        s.add(u)
+        await s.commit()
+        return _user_row(u)
+
+
+async def update_user(user_id: int, **fields) -> dict | None:
+    """
+    Изменить учётную запись. Принимает только full_name, role и active —
+    пароль меняется отдельным методом, чтобы хеш не проходил через общий путь.
+    """
+    allowed = {k: v for k, v in fields.items()
+               if k in ("full_name", "role", "active") and v is not None}
+    async with Session() as s:
+        u = (await s.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if u is None:
+            return None
+        for k, v in allowed.items():
+            setattr(u, k, v)
+        await s.commit()
+        return _user_row(u)
+
+
+async def list_audit(limit: int = 100, offset: int = 0, user_id: int | None = None,
+                     event: str | None = None) -> list[dict]:
+    """
+    Журнал аудита, свежие записи первыми. Логин подставляется по user_id:
+    читать журнал по числовым идентификаторам неудобно, а хранить логин в самой
+    записи — значит расходиться с `users` после переименования.
+    """
+    async with Session() as s:
+        q = (select(AuditLog, User.login)
+             .join(User, User.id == AuditLog.user_id, isouter=True)
+             .order_by(AuditLog.id.desc()).limit(limit).offset(offset))
+        if user_id is not None:
+            q = q.where(AuditLog.user_id == user_id)
+        if event:
+            q = q.where(AuditLog.event == event)
+        rows = (await s.execute(q)).all()
+        return [dict(id=a.id, user_id=a.user_id, login=login, event=a.event,
+                     details=a.details or {}, ip=a.ip, created_at=str(a.created_at))
+                for a, login in rows]
+
+
+async def list_audit_events() -> list[str]:
+    """Встречающиеся в журнале виды событий — для выпадающего фильтра."""
+    async with Session() as s:
+        rows = (await s.execute(select(AuditLog.event).distinct()
+                                .order_by(AuditLog.event))).scalars().all()
+        return list(rows)
+
+
 # ---------------------------------------------------------------------- сценарии
 
 async def list_scenarios() -> list[dict]:
@@ -418,6 +492,48 @@ async def get_assessment(session_id: str) -> dict | None:
 
 
 # ------------------------------------------------------------ разбор тренировки
+
+def hide_steps(assessment: dict | None) -> dict | None:
+    """
+    Убрать из оценки разбор эталонных шагов.
+
+    Обучаемому он показывается только после того, как инструктор открыл разбор.
+    Без этого оставалась лазейка: начать тренировку, сразу завершить её и
+    прочитать в собственной оценке правильную последовательность действий —
+    то есть получить «ответы» к сценарию в обход `/reference`.
+
+    Сводка (сколько шагов из скольких, сколько с опозданием) остаётся: она
+    говорит, насколько всё плохо, но не подсказывает, что именно надо было
+    сделать.
+    """
+    if not assessment:
+        return assessment
+    details = dict(assessment.get("details") or {})
+    if details.get("released"):
+        return assessment
+    details.pop("steps", None)
+    return dict(assessment, details=details)
+
+
+async def release_debrief(session_id: str) -> bool:
+    """
+    Открыть обучаемому разбор эталонных шагов. False — если оценки ещё нет.
+
+    Признак кладём в `details` оценки, а не в отдельную колонку: таблицы
+    создаются через `create_all`, без миграций, и новый столбец сломал бы уже
+    развёрнутые базы — там его пришлось бы добавлять руками.
+    """
+    async with Session() as s:
+        r = (await s.execute(select(Assessment)
+             .where(Assessment.session_id == session_id)
+             .order_by(Assessment.id.desc()))).scalars().first()
+        if r is None:
+            return False
+        # переприсваиваем целиком: изменение внутри JSON-словаря SQLAlchemy
+        # не отслеживает и такое обновление молча не сохранилось бы
+        r.details = {**(r.details or {}), "released": True}
+        await s.commit()
+        return True
 
 async def get_debrief(session_id: str) -> dict | None:
     """

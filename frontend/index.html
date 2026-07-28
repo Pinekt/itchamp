@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>КТК ЭЛОУ-АВТ — рабочее место оператора</title>
 <style>
@@ -51,6 +52,8 @@
   <span style="margin-left:auto;color:var(--muted);font-size:12px">t = <b id="clock">0</b> c</span>
   <span id="who" class="user" title="Текущий пользователь">—</span>
   <button class="sec" onclick="location.href='/debrief'" style="padding:5px 11px;font-size:12px">Разбор</button>
+  <button class="sec" data-role="admin" onclick="location.href='/admin'"
+          style="padding:5px 11px;font-size:12px">Администрирование</button>
   <button class="sec" id="logout" onclick="logout()" style="padding:5px 11px;font-size:12px">Выход</button>
 </header>
 

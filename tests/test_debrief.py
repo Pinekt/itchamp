@@ -127,8 +127,11 @@ def test_missed_critical_step_is_visible_and_penalised(client):
     """
     Пропущен критический шаг (насос не включён) — балл ниже, а в разборе
     видно, какой именно шаг не сделан.
+
+    Тренировку проводит инструктор: разбор шагов проверяется от роли, которой
+    он открыт сразу, — здесь под проверкой методика оценки, а не доступ к ней.
     """
-    login_as(client, "operator")
+    login_as(client, "instructor")
     with client.websocket_connect("/ws") as ws:
         a = run_training(ws, "startup", [
             {"action": "set_valve", "target": "VALVE_FEED", "value": 70},
@@ -147,7 +150,7 @@ def test_steps_are_matched_in_order(client):
     Порядок операций важен: пуск процесса до включения насоса не засчитывает
     шаг «включить насос» задним числом.
     """
-    login_as(client, "operator")
+    login_as(client, "instructor")
     with client.websocket_connect("/ws") as ws:
         a = run_training(ws, "startup", [
             {"action": "start", "target": None, "value": None},
@@ -212,6 +215,78 @@ def test_instructor_gets_reference_in_debrief(client, finished_session):
     login_as(client, "instructor")
     d = client.get(f"/api/sessions/{sid}/debrief").json()
     assert d["reference"] and d["reference"][0]["expected_action"] == "set_pump"
+
+
+def test_trainee_does_not_see_reference_steps_until_released(client, finished_session):
+    """
+    Лазейка, которую закрывает открытие разбора: начать тренировку, сразу
+    завершить её и прочитать в собственной оценке правильную последовательность.
+    До открытия обучаемый видит балл и сводку, но не сами шаги.
+    """
+    sid, _ = finished_session
+    d = client.get(f"/api/sessions/{sid}/debrief").json()
+    details = d["assessment"]["details"]
+    assert "steps" not in details
+    assert details["steps_total"] and details["steps_done"] is not None   # сводка осталась
+    # тот же разрыв закрыт и в отдельной оценке
+    assert "steps" not in client.get(f"/api/sessions/{sid}/assessment").json()["details"]
+
+
+def test_instructor_sees_steps_without_release(client, finished_session):
+    """Инструктору разбор доступен сразу — открывать самому себе нечего."""
+    sid, _ = finished_session
+    client.cookies.clear()
+    login_as(client, "instructor")
+    steps = client.get(f"/api/sessions/{sid}/debrief").json()["assessment"]["details"]["steps"]
+    assert steps and steps[0]["description"]
+
+
+def test_released_debrief_becomes_visible_to_trainee(client, finished_session):
+    """После открытия инструктором обучаемый видит свои шаги — это и есть разбор."""
+    sid, _ = finished_session
+    client.cookies.clear()
+    login_as(client, "instructor")
+    assert client.post(f"/api/sessions/{sid}/release").status_code == 200
+
+    client.cookies.clear()
+    login_as(client, "operator")
+    details = client.get(f"/api/sessions/{sid}/debrief").json()["assessment"]["details"]
+    assert details["released"] is True
+    assert details["steps"] and details["steps"][0]["description"]
+
+
+def test_operator_cannot_release_debrief(client, finished_session):
+    """Открыть разбор самому себе обучаемый не может — иначе смысла в защите нет."""
+    sid, _ = finished_session
+    assert client.post(f"/api/sessions/{sid}/release").status_code == 403
+    assert "steps" not in client.get(f"/api/sessions/{sid}/debrief").json()["assessment"]["details"]
+
+
+def test_release_of_unknown_session_gives_404(client):
+    login_as(client, "instructor")
+    assert client.post("/api/sessions/нет-такой/release").status_code == 404
+
+
+def test_release_without_assessment_gives_409(client):
+    """Нечего открывать, пока тренировка не завершена и оценки нет."""
+    login_as(client, "instructor")
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"session_action": "start", "scenario": "startup"})
+        wait_for(ws, "state")
+        sid = client.get("/api/sessions").json()[0]["id"]
+        assert client.post(f"/api/sessions/{sid}/release").status_code == 409
+
+
+def test_ws_assessment_hides_steps_from_trainee(client):
+    """
+    Оценка приходит и по WebSocket сразу после «Завершить» — эталонные шаги
+    должны быть закрыты и там, иначе защита обходится не открывая разбор.
+    """
+    login_as(client, "operator")
+    with client.websocket_connect("/ws") as ws:
+        payload = run_training(ws, "startup", STARTUP_CORRECT)
+    assert "steps" not in payload["details"]
+    assert payload["total_score"] == 100.0        # сама оценка при этом полная
 
 
 def test_operator_cannot_open_foreign_debrief(client):

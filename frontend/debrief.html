@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>КТК ЭЛОУ-АВТ — разбор тренировки</title>
 <style>
@@ -79,6 +80,8 @@
   <span style="margin-left:auto"></span>
   <span id="who" class="user">—</span>
   <button class="sec" onclick="location.href='/'" style="padding:5px 11px;font-size:12px">Рабочее место</button>
+  <button class="sec" data-role="admin" onclick="location.href='/admin'"
+          style="padding:5px 11px;font-size:12px">Администрирование</button>
   <button class="sec" onclick="logout()" style="padding:5px 11px;font-size:12px">Выход</button>
 </header>
 
@@ -155,11 +158,13 @@ const num=(v,d=1)=>v==null?'—':(+v).toFixed(d);
 let me=null, shown={}, data=null;
 SERIES.forEach(s=>shown[s.key]=true);
 
-async function api(url){
-  const r=await fetch(url);
+async function api(url,opts){
+  const r=await fetch(url,opts);
   if(r.status===401){location.href='/login'; throw new Error('нет сеанса');}
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
+  let body=null;
+  try{ body=await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((body&&body.detail)||`ошибка ${r.status}`);
+  return body;
 }
 async function logout(){ await fetch('/api/logout',{method:'POST'}); location.href='/login'; }
 
@@ -246,11 +251,38 @@ function renderAssessment(){
     </div>
     <div class="kpi">${kpi.map(([n,v])=>`<div><div class="n">${n}</div><div class="v">${v}</div></div>`).join('')}</div>
     ${pen?`<div class="pen"><u>Из чего сложился штраф</u><br>${pen}</div>`:''}
-    ${renderSteps(d.steps)}`;
+    ${renderSteps(d.steps, d)}
+    ${releaseButton(d)}`;
 }
 
-function renderSteps(steps){
-  if(!steps||!steps.length) return '';
+// инструктор открывает обучаемому разбор эталонных шагов — до этого тот видит
+// только балл и сводку
+function releaseButton(d){
+  if(me.role==='operator') return '';
+  if(d.released) return `<div class="muted" style="font-size:12px;margin-top:12px">
+    ✓ Разбор открыт обучаемому.</div>`;
+  return `<button class="sec" style="margin-top:12px" onclick="releaseDebrief()">
+    Открыть разбор обучаемому</button>`;
+}
+
+async function releaseDebrief(){
+  try{
+    await api(`/api/sessions/${data.session.id}/release`,{method:'POST'});
+    await openSession(data.session.id);
+  }catch(e){ alert(e.message); }
+}
+
+function renderSteps(steps, d){
+  // шагов нет в ответе — значит инструктор ещё не открыл разбор обучаемому
+  if(!steps){
+    if(me.role!=='operator') return '';
+    return `<div style="margin-top:16px" class="muted" style="font-size:12px">
+      <h2 style="margin-bottom:6px">Эталонные шаги</h2>
+      Разбор правильной последовательности откроет инструктор.
+      Пока видны балл и сводка: выполнено ${d.steps_done??0} шагов из ${d.steps_total??0}.
+    </div>`;
+  }
+  if(!steps.length) return '';
   const li=steps.map(s=>{
     const cls=!s.done?'miss':(s.late?'late':'ok');
     const mark=!s.done?'✗':(s.late?'⏱':'✓');

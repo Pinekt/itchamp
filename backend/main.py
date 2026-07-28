@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from .models import ControlCommand, OperatorAction, WSMessage, WSMessageType
 from .session import TrainingSession
 from .scenarios import SCENARIOS
-from . import auth, db, storage, seed
+from . import admin, auth, db, storage, seed
 from .auth import current_user, optional_user, require_role
 
 
@@ -45,8 +45,9 @@ async def lifespan(app: FastAPI):
         await asyncio.wait(set(_background), timeout=5.0)
 
 
-app = FastAPI(title="КТК ЭЛОУ-АВТ", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="КТК ЭЛОУ-АВТ", version="0.5.0", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(admin.router)
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 
 #: Роли, которым доступны чужие тренировки и эталонные шаги.
@@ -118,7 +119,12 @@ async def session_assessment(session_id: str, request: Request,
                              user: dict = Depends(current_user)):
     """Оценка квалификации по итогам тренировки (создаётся при завершении)."""
     await _ensure_session_access(session_id, user, request)
-    return await storage.get_assessment(session_id) or {"detail": "оценка ещё не сформирована"}
+    assessment = await storage.get_assessment(session_id)
+    if assessment is None:
+        return {"detail": "оценка ещё не сформирована"}
+    if user["role"] not in SUPERVISOR_ROLES:
+        assessment = storage.hide_steps(assessment)
+    return assessment
 
 
 @app.get("/api/sessions/{session_id}/telemetry")
@@ -136,7 +142,9 @@ async def session_debrief(session_id: str, request: Request,
     Разбор тренировки одним ответом: шапка, журнал, телеметрия, ошибки, оценка.
 
     Эталонные шаги добавляются только инструктору и администратору — оператору
-    они закрыты и здесь, иначе разбор стал бы обходом `/reference`.
+    они закрыты и здесь, иначе разбор стал бы обходом `/reference`. Разбор
+    собственных шагов обучаемый видит после того, как инструктор открыл его
+    (см. `POST /api/sessions/{id}/release`).
     """
     await _ensure_session_access(session_id, user, request)
     data = await storage.get_debrief(session_id)
@@ -145,7 +153,29 @@ async def session_debrief(session_id: str, request: Request,
                             detail="Тренировка не найдена")
     if user["role"] in SUPERVISOR_ROLES:
         data["reference"] = await storage.get_reference_steps(data["session"]["scenario_code"])
+    else:
+        data["assessment"] = storage.hide_steps(data["assessment"])
     return data
+
+
+@app.post("/api/sessions/{session_id}/release")
+async def release_debrief(session_id: str, request: Request,
+                          user: dict = Depends(require_role(*SUPERVISOR_ROLES))):
+    """
+    Открыть обучаемому разбор его эталонных шагов — действие инструктора.
+    До этого оператор видит балл и сводку, но не правильную последовательность.
+    """
+    owner = await storage.get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Тренировка не найдена")
+    if not await storage.release_debrief(session_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Оценка ещё не сформирована")
+    await storage.audit(user["id"], "debrief_released",
+                        {"session": session_id, "trainee": owner["operator"]},
+                        ip=auth.client_ip(request))
+    return {"detail": "Разбор открыт обучаемому"}
 
 
 # ------------------------------------------------------------------ интерфейс
@@ -169,6 +199,20 @@ async def debrief_page(user: dict | None = Depends(optional_user)):
     if user is None:
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     return FileResponse(FRONTEND / "debrief.html")
+
+
+@app.get("/admin")
+async def admin_page(user: dict | None = Depends(optional_user)):
+    """
+    Администрирование: учётные записи и журнал аудита.
+
+    Страница отдаётся любому вошедшему, но данные на ней закрыты ролью — сами
+    `/api/users` и `/api/audit` требуют admin и пишут отказ в аудит. Прятать
+    ещё и HTML смысла нет: в нём нет ничего, кроме разметки и запросов.
+    """
+    if user is None:
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    return FileResponse(FRONTEND / "admin.html")
 
 
 # ----------------------------------------------------------------- WebSocket
@@ -326,6 +370,11 @@ async def ws(websocket: WebSocket):
                     sess.stop()
                     assessment = await finish("finished")
                     if assessment:
+                        # оператору эталонные шаги закрыты и здесь: иначе их
+                        # можно было бы прочитать сразу после «Завершить»,
+                        # не открывая разбор
+                        if user["role"] not in SUPERVISOR_ROLES:
+                            assessment = storage.hide_steps(assessment)
                         await websocket.send_text(json.dumps(
                             {"type": "assessment", "payload": assessment}, ensure_ascii=False))
                 continue

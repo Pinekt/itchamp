@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КТК ЭЛОУ-АВТ — администрирование</title>
+<style>
+  :root{--bg:#0f1420;--panel:#1a2130;--line:#2b3345;--txt:#e6ebf5;--muted:#8a94a8;
+        --accent:#5B2CE0;--ok:#1E7A3D;--warn:#c9821a;--err:#c0392b;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 18px;display:flex;
+         align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .wrap{padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  @media(max-width:1200px){.wrap{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+  .panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:8px 13px;
+         font-size:13px;cursor:pointer} button:hover{opacity:.9}
+  button.sec{background:#2b3345} button.danger{background:var(--err)}
+  button.mini{padding:4px 9px;font-size:12px}
+  button:disabled,select:disabled{opacity:.4;cursor:not-allowed}
+  button:disabled:hover{opacity:.4}
+  input,select{background:#10161f;color:var(--txt);border:1px solid var(--line);
+               border-radius:6px;padding:7px;font-size:13px;font-family:inherit}
+  input:focus,select:focus{outline:1px solid var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;
+     letter-spacing:.04em;padding:0 8px 7px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:8px 8px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr:last-child td{border-bottom:0}
+  .scroll{max-height:520px;overflow:auto}
+  .tag{padding:2px 8px;border-radius:20px;font-size:11px;white-space:nowrap;background:#2b3345}
+  .tag.admin{background:var(--accent)} .tag.instructor{background:#2b5f8a}
+  .tag.off{background:var(--err)} .tag.on{background:var(--ok)}
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+  .msg{margin-top:10px;font-size:13px;padding:9px 11px;border-radius:7px;display:none}
+  .msg.ok{display:block;background:#12301d;border:1px solid var(--ok)}
+  .msg.err{display:block;background:#2f1516;border:1px solid var(--err)}
+  .empty{color:var(--muted);font-size:13px;padding:10px 0}
+  code{font-size:11px;color:var(--muted);word-break:break-all}
+  .denied{max-width:640px;margin:60px auto;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>КТК ЭЛОУ-АВТ · администрирование</h1>
+  <span style="margin-left:auto"></span>
+  <span id="who" class="muted" style="font-size:12px">—</span>
+  <button class="sec mini" onclick="location.href='/'">Рабочее место</button>
+  <button class="sec mini" onclick="location.href='/debrief'">Разбор</button>
+  <button class="sec mini" onclick="logout()">Выход</button>
+</header>
+
+<div id="denied" class="denied" style="display:none">
+  <h2>Недостаточно прав</h2>
+  <p class="muted">Раздел доступен только администратору.</p>
+  <button class="sec" onclick="location.href='/'">Вернуться на рабочее место</button>
+</div>
+
+<div class="wrap" id="wrap" style="display:none">
+  <div>
+    <div class="panel">
+      <h2>Новая учётная запись</h2>
+      <div class="grid">
+        <input id="nLogin" placeholder="логин (латиница)" autocomplete="off">
+        <input id="nName" placeholder="ФИО" autocomplete="off">
+        <select id="nRole">
+          <option value="operator">оператор</option>
+          <option value="instructor">инструктор</option>
+          <option value="admin">администратор</option>
+        </select>
+        <input id="nPass" type="password" placeholder="пароль" autocomplete="new-password">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="createUser()">Завести</button>
+        <span class="muted" style="font-size:12px">Пароль — не короче 8 символов.</span>
+      </div>
+      <div id="userMsg" class="msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Учётные записи</h2>
+      <div class="scroll">
+        <table><thead><tr>
+          <th>Логин</th><th>ФИО</th><th>Роль</th><th>Состояние</th><th></th>
+        </tr></thead><tbody id="users"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Журнал аудита</h2>
+      <div class="row">
+        <select id="fEvent" onchange="loadAudit()"><option value="">все события</option></select>
+        <select id="fUser" onchange="loadAudit()"><option value="">все пользователи</option></select>
+        <select id="fLimit" onchange="loadAudit()">
+          <option value="100">100 записей</option>
+          <option value="300">300 записей</option>
+          <option value="1000">1000 записей</option>
+        </select>
+        <button class="sec mini" onclick="loadAudit()">Обновить</button>
+      </div>
+      <div class="scroll" style="margin-top:10px">
+        <table><thead><tr>
+          <th>Время</th><th>Пользователь</th><th>Событие</th><th>IP</th><th>Подробности</th>
+        </tr></thead><tbody id="audit"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const ROLE_NAMES={operator:'оператор',instructor:'инструктор',admin:'администратор'};
+// расшифровки событий: журнал читает человек, а не только машина
+const EVENT_NAMES={
+  login_success:'успешный вход', login_failed:'неудачный вход',
+  login_blocked:'вход заблокирован (подбор)', logout:'выход',
+  access_denied:'отказано в доступе', password_rehashed:'пароль перехеширован',
+  password_reset:'пароль изменён администратором',
+  user_created:'заведена учётная запись', user_updated:'изменена учётная запись',
+  session_start:'начата тренировка', session_end:'завершена тренировка',
+};
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let me=null, users=[];
+
+async function api(url,opts){
+  const r=await fetch(url,opts);
+  if(r.status===401){location.href='/login'; throw new Error('нет сеанса');}
+  let body=null;
+  try{ body=await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((body&&body.detail)||`ошибка ${r.status}`);
+  return body;
+}
+async function logout(){ await fetch('/api/logout',{method:'POST'}); location.href='/login'; }
+
+function say(el,text,ok){
+  const m=$(el); m.className='msg '+(ok?'ok':'err'); m.textContent=text;
+  if(ok) setTimeout(()=>{m.className='msg';}, 4000);
+}
+
+async function init(){
+  me=await api('/api/me');
+  $('who').innerHTML=`<b style="color:var(--txt)">${esc(me.full_name)}</b> · ${ROLE_NAMES[me.role]||me.role}`;
+  if(me.role!=='admin'){ $('denied').style.display='block'; return; }
+  $('wrap').style.display='grid';
+  await loadUsers();
+  await loadEvents();
+  await loadAudit();
+}
+
+// ------------------------------------------------------------ учётные записи
+
+async function loadUsers(){
+  users=await api('/api/users');
+  $('users').innerHTML=users.map(u=>{
+    const self=u.id===me.id;
+    return `<tr>
+      <td><b>${esc(u.login)}</b>${self?'<br><span class="muted">это вы</span>':''}</td>
+      <td>${esc(u.full_name)}</td>
+      <td>
+        <select class="tag ${esc(u.role)}" style="padding:3px 6px"
+                ${self?'disabled title="собственную роль изменить нельзя"':''}
+                onchange="setRole(${u.id},this.value)">
+          ${Object.entries(ROLE_NAMES).map(([v,n])=>
+            `<option value="${v}"${u.role===v?' selected':''}>${n}</option>`).join('')}
+        </select>
+      </td>
+      <td><span class="tag ${u.active?'on':'off'}">${u.active?'действует':'отключена'}</span></td>
+      <td class="row" style="gap:6px">
+        <button class="mini ${u.active?'danger':'sec'}" ${self?'disabled':''}
+                onclick="setActive(${u.id},${!u.active})">
+          ${u.active?'Отключить':'Включить'}</button>
+        <button class="mini sec" onclick="askPassword(${u.id},'${esc(u.login)}')">Пароль</button>
+      </td></tr>`;
+  }).join('');
+  // фильтр журнала по пользователю наполняем из того же списка
+  const cur=$('fUser').value;
+  $('fUser').innerHTML='<option value="">все пользователи</option>'+
+    users.map(u=>`<option value="${u.id}">${esc(u.login)}</option>`).join('');
+  $('fUser').value=cur;
+}
+
+async function createUser(){
+  const body={login:$('nLogin').value.trim(), full_name:$('nName').value.trim(),
+              role:$('nRole').value, password:$('nPass').value};
+  if(!body.login||!body.full_name||!body.password){
+    say('userMsg','Заполните логин, ФИО и пароль.',false); return;
+  }
+  try{
+    const u=await api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify(body)});
+    $('nLogin').value=$('nName').value=$('nPass').value='';
+    say('userMsg',`Учётная запись «${u.login}» заведена.`,true);
+    await loadUsers(); await loadAudit();
+  }catch(e){ say('userMsg',e.message,false); }
+}
+
+async function patchUser(id,changes){
+  try{
+    await api(`/api/users/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
+                                  body:JSON.stringify(changes)});
+    await loadUsers(); await loadAudit();
+  }catch(e){
+    say('userMsg',e.message,false);
+    await loadUsers();          // вернуть выпадающий список к состоянию из БД
+  }
+}
+const setRole=(id,role)=>patchUser(id,{role});
+function setActive(id,active){
+  const u=users.find(x=>x.id===id);
+  if(!active&&!confirm(`Отключить «${u.login}»? Действующий сеанс прервётся немедленно.`)) return;
+  patchUser(id,{active});
+}
+
+async function askPassword(id,login){
+  const pass=prompt(`Новый пароль для «${login}» (не короче 8 символов):`);
+  if(!pass) return;
+  try{
+    await api(`/api/users/${id}/password`,{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pass})});
+    say('userMsg',`Пароль для «${login}» изменён.`,true);
+    await loadAudit();
+  }catch(e){ say('userMsg',e.message,false); }
+}
+
+// -------------------------------------------------------------- журнал аудита
+
+async function loadEvents(){
+  const events=await api('/api/audit/events');
+  $('fEvent').innerHTML='<option value="">все события</option>'+
+    events.map(e=>`<option value="${esc(e)}">${esc(EVENT_NAMES[e]||e)}</option>`).join('');
+}
+
+async function loadAudit(){
+  const p=new URLSearchParams({limit:$('fLimit').value});
+  if($('fEvent').value) p.set('event',$('fEvent').value);
+  if($('fUser').value)  p.set('user_id',$('fUser').value);
+  const rows=await api('/api/audit?'+p);
+  $('audit').innerHTML=rows.length?rows.map(a=>`<tr>
+      <td class="muted">${esc((a.created_at||'').slice(0,19).replace('T',' '))}</td>
+      <td>${a.login?esc(a.login):'<span class="muted">—</span>'}</td>
+      <td>${esc(EVENT_NAMES[a.event]||a.event)}<br><code>${esc(a.event)}</code></td>
+      <td class="muted">${esc(a.ip||'—')}</td>
+      <td><code>${esc(JSON.stringify(a.details||{}))}</code></td>
+    </tr>`).join('')
+    :'<tr><td colspan="5" class="empty">Записей нет.</td></tr>';
+}
+
+init().catch(e=>console.error(e));
+</script>
+</body>
+</html>
