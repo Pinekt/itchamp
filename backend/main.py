@@ -364,20 +364,27 @@ async def ws(websocket: WebSocket):
                     await finish("aborted")
                     code = msg.get("scenario", "startup")
                     sc = await storage.get_scenario(code)
-                    ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
-                    if ok:
-                        sess.session_id = await storage.create_session(
-                            sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
-                        last_event_t = time.time()
+                    # Под замком, чтобы такт не застал тренировку уже активной,
+                    # но ещё без записи в БД: `sess.start` выставляет active
+                    # сразу, а create_session — это поход в базу. В это окно
+                    # первые такты уходили в никуда, а список тренировок ещё
+                    # не показывал начатую.
+                    async with tick_lock:
+                        ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
+                        if ok:
+                            sess.session_id = await storage.create_session(
+                                sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
+                            last_event_t = time.time()
                 elif sa == "reset":
                     # сброс — это новая попытка: старую закрываем и заводим
                     # отдельную запись, иначе в журнале смешались бы два прогона
                     await finish("aborted")
-                    sess.reset()
-                    if sess.scenario_id:
-                        sess.session_id = await storage.create_session(
-                            sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
-                    last_event_t = time.time()
+                    async with tick_lock:
+                        sess.reset()
+                        if sess.scenario_id:
+                            sess.session_id = await storage.create_session(
+                                sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
+                        last_event_t = time.time()
                 elif sa == "stop":
                     sess.stop()
                     assessment = await finish("finished")

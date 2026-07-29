@@ -149,10 +149,14 @@ def test_operator_cannot_open_foreign_session(client):
     """Чужую тренировку оператор не откроет — 403 и запись в аудите."""
     # тренировку заводит инструктор
     login_as(client, "instructor")
+    instructor_id = client.get("/api/me").json()["id"]
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"session_action": "start", "scenario": "startup"})
         ws.receive_json()
-    foreign = client.get("/api/sessions").json()[0]["id"]
+    # именно свою, а не первую в списке: инструктор видит все тренировки,
+    # и полагаться на порядок выдачи здесь незачем
+    foreign = next(s["id"] for s in client.get("/api/sessions").json()
+                   if s["user_id"] == instructor_id)
 
     client.cookies.clear()
     login_as(client, "operator")
