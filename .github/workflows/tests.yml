@@ -6,6 +6,9 @@
 # а он почти не проверяет типы: время со смещением в колонке без пояса он
 # принимал молча. PostgreSQL отказался наполнять таблицу пользователей, и
 # ошибка вскрылась при развёртывании — на боевом сервере, а не в разработке.
+#
+# Последним заданием — выкладка стенда, но только с ветки, которую он
+# показывает, и только если все проверки прошли.
 name: Автотесты
 
 on:
@@ -13,6 +16,11 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+
+env:
+  # Ветка, которую показывает общий стенд. Менять здесь и в
+  # deploy/setup-ci-deploy.sh (переменная BRANCH) одновременно.
+  STAND_BRANCH: claude/roles-auth-training-review-i9u90o
 
 jobs:
   sqlite:
@@ -89,3 +97,47 @@ jobs:
           KTK_PASSWORD_OPERATOR: ci-operator-pass
           KTK_PASSWORD_INSTRUCTOR: ci-instructor-pass
           KTK_PASSWORD_ADMIN: ci-admin-pass
+
+  deploy:
+    name: Выкладка стенда
+    needs: [sqlite, postgres, docker]
+    # Только с ветки стенда и только из самого репозитория: у форка нет
+    # доступа к секретам, и выкладывать чужой код на общий стенд нельзя.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_name == 'claude/roles-auth-training-review-i9u90o' &&
+      github.repository == 'mranton152/itchamp'
+    runs-on: ubuntu-latest
+
+    # Два пуша подряд не должны пересобирать образ одновременно: на сервере
+    # одно ядро. Предыдущую выкладку не обрываем — на сервере уже идёт docker.
+    concurrency:
+      group: stand-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Ключ доступа
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Отпечаток сервера закрепляем сами: StrictHostKeyChecking=no
+          # означал бы согласие говорить с кем угодно, кто ответит по адресу.
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" -H \
+              "${{ secrets.DEPLOY_HOST }}" > ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Обновить стенд
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "${{ secrets.DEPLOY_PORT }}" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              "ktkdeploy@${{ secrets.DEPLOY_HOST }}" \
+              "sudo -n /usr/local/sbin/ktk-update"
+
+      - name: Стенд отвечает снаружи
+        run: |
+          curl --fail --show-error --retry 10 --retry-delay 3 \
+               --retry-all-errors -o /dev/null \
+               "https://itchamp.root72.ru/login" \
+            || curl --fail --show-error --retry 5 --retry-delay 3 \
+                    --retry-all-errors -o /dev/null \
+                    "http://itchamp.root72.ru/login"
