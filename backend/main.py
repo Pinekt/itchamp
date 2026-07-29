@@ -276,6 +276,12 @@ async def ws(websocket: WebSocket):
     last_event_t = time.time()
     ticker_task: asyncio.Task | None = None
 
+    # Разделяет такт симуляции и завершение тренировки. Такт пишет телеметрию
+    # и ошибки, завершение по ним считает оценку — и делать это одновременно
+    # нельзя: такт, начавшийся до нажатия «Завершить», успевал дописать ошибку
+    # уже после того, как оценка сформирована, и она эту ошибку не учитывала.
+    tick_lock = asyncio.Lock()
+
     async def finish(status_: str) -> dict | None:
         """
         Закрыть текущую тренировку и сформировать оценку — ровно один раз.
@@ -285,11 +291,16 @@ async def ws(websocket: WebSocket):
         если та ещё активна, поэтому повторный вызов ничего не портит и второй
         оценки не создаёт.
         """
-        sid, sess.session_id = sess.session_id, None
-        if not sid:
-            return None
-        if not await storage.finalize_session(sid, status_, user_id=user["id"], ip=ip):
-            return None
+        async with tick_lock:
+            # Под замком дожидаемся такта, который уже начался, и обнуляем
+            # идентификатор: следующий такт увидит None и писать не станет.
+            sid, sess.session_id = sess.session_id, None
+            if not sid:
+                return None
+            if not await storage.finalize_session(sid, status_, user_id=user["id"], ip=ip):
+                return None
+        # Замок больше не нужен: в эту тренировку уже никто не пишет,
+        # а считать оценку под ним — задерживать такты на пустом месте.
         return await storage.build_assessment(sid)
 
     async def ticker():
@@ -304,19 +315,20 @@ async def ws(websocket: WebSocket):
         next_at = time.monotonic()
         while True:
             next_at += TICK_PERIOD_S
-            if sess.active:
-                state, feedback, events = sess.tick()
-                # идентификатор запоминаем один раз на такт: пока идут отправка
-                # и запись, оператор может нажать «Завершить», и sess.session_id
-                # обнулится прямо посреди такта
-                sid = sess.session_id
-                await websocket.send_text(WSMessage(
-                    type=WSMessageType.STATE, payload=state.model_dump()).model_dump_json())
-                await websocket.send_text(WSMessage(
-                    type=WSMessageType.FEEDBACK, payload=feedback.model_dump()).model_dump_json())
-                if sid:
-                    await storage.save_telemetry(sid, state)
-                    await storage.save_error(sid, feedback)
+            # Такт целиком под замком: либо он успевает записать свои данные
+            # до формирования оценки, либо видит уже обнулённый идентификатор
+            # и не пишет вовсе. Промежуточного состояния нет.
+            async with tick_lock:
+                if sess.active:
+                    state, feedback, events = sess.tick()
+                    sid = sess.session_id
+                    await websocket.send_text(WSMessage(
+                        type=WSMessageType.STATE, payload=state.model_dump()).model_dump_json())
+                    await websocket.send_text(WSMessage(
+                        type=WSMessageType.FEEDBACK, payload=feedback.model_dump()).model_dump_json())
+                    if sid:
+                        await storage.save_telemetry(sid, state)
+                        await storage.save_error(sid, feedback)
             delay = next_at - time.monotonic()
             if delay < 0:
                 # такт не уложился в период — не копим долг, начинаем отсчёт заново

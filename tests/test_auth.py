@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from backend import security
-from conftest import login_as
+from conftest import as_json, login_as
 
 
 # ------------------------------------------------------------------- вход
@@ -230,7 +230,8 @@ def test_audit_records_failed_login_with_attempt_number(client, db_query):
     event, details = db_query("SELECT event, details FROM audit_log "
                               "WHERE event='login_failed' ORDER BY id DESC LIMIT 1")[0]
     assert event == "login_failed"
-    assert '"login": "admin"' in details and '"attempt": 1' in details
+    details = as_json(details)
+    assert details["login"] == "admin" and details["attempt"] == 1
 
 
 def test_audit_records_lockout(client, db_query):
@@ -246,7 +247,9 @@ def test_audit_records_access_denied(client, db_query):
     event, details = db_query("SELECT event, details FROM audit_log "
                               "WHERE event='access_denied' ORDER BY id DESC LIMIT 1")[0]
     assert event == "access_denied"
-    assert "reference" in details
+    details = as_json(details)
+    assert details["path"].endswith("/reference")
+    assert details["role"] == "operator"
 
 
 def test_audit_records_logout(client, db_query):

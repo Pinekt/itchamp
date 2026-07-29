@@ -22,11 +22,16 @@ from conftest import login_as
 WAIT_MESSAGES = 400        # предел ожидания сообщения нужного типа, штук
 
 
-def wait_until(check, timeout: float = 5.0):
+def wait_until(check, timeout: float = 20.0):
     """
     Дождаться условия. Закрытие тренировки при обрыве связи выполняется на
     стороне сервера уже после того, как клиент отпустил канал, поэтому
     проверять его сразу же нельзя — нужно дать обработчику дойти до конца.
+
+    Запас намеренно большой: обычно условие выполняется за десятки
+    миллисекунд, и цикл выходит сразу. Предел здесь — страховка от зависания,
+    а не норматив: на загруженной машине сборщика прежние 5 секунд изредка
+    не выдерживались, и тест падал на ровном месте.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -192,6 +197,35 @@ def test_continuous_alarm_counts_as_one_error(client):
 
     episode = d["error_episodes"][0]
     assert episode["count"] > 1 and episode["t_to"] > episode["t_from"]
+
+
+def test_assessment_counts_everything_that_was_written(client):
+    """
+    Оценка обязана учесть всё, что записано за тренировку.
+
+    Такт симуляции и завершение работают в одном цикле событий: такт,
+    начавшийся до нажатия «Завершить», успевал дописать ошибку уже после того,
+    как оценка сформирована, и она эту ошибку не учитывала. Расхождение было
+    ровно на одну запись и всплывало примерно раз на десять прогонов.
+
+    Окно узкое, поэтому повторяем: с одного раза в него можно не попасть.
+    """
+    login_as(client, "operator")
+    for _ in range(3):
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"session_action": "start", "scenario": "pressure_alarm"})
+            wait_for(ws, "state")
+            ws.send_json({"action": "set_valve", "target": "VALVE_FEED", "value": 100})
+            wait_for(ws, "action")
+            for _ in range(20):
+                wait_for(ws, "state")
+            sid = run_stop(ws)
+
+        d = client.get(f"/api/sessions/{sid}/debrief").json()
+        details = d["assessment"]["details"]
+        assert details["error_records"] == len(d["errors"]), \
+            "оценка посчитана раньше, чем такт дописал свою ошибку"
+        assert d["assessment"]["errors_count"] == len(d["error_episodes"])
 
 
 def test_assessment_counts_reaction_time(client, finished_session):

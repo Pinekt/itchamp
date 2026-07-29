@@ -1,0 +1,91 @@
+# Автотесты КТК ЭЛОУ-АВТ.
+#
+# Два прогона одного и того же набора — на SQLite и на PostgreSQL.
+#
+# Вторая половина появилась не для симметрии. Тесты работали только на SQLite,
+# а он почти не проверяет типы: время со смещением в колонке без пояса он
+# принимал молча. PostgreSQL отказался наполнять таблицу пользователей, и
+# ошибка вскрылась при развёртывании — на боевом сервере, а не в разработке.
+name: Автотесты
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sqlite:
+    name: Тесты на SQLite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"     # та же версия, что в образе (Dockerfile)
+          cache: pip
+
+      - name: Зависимости
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: pytest
+        run: pytest
+
+  postgres:
+    name: Тесты на PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16          # та же версия, что в боевом стеке
+        env:
+          POSTGRES_USER: ktk
+          POSTGRES_PASSWORD: ktk
+          POSTGRES_DB: ktk_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ktk -d ktk_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Зависимости
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: pytest
+        # Заданный DATABASE_URL conftest не подменяет и гоняет набор на этой базе
+        env:
+          DATABASE_URL: postgresql+asyncpg://ktk:ktk@127.0.0.1:5432/ktk_test
+        run: pytest
+
+  docker:
+    name: Сборка образа
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Боевой стек собирается на сервере при каждой выкладке
+      # (deploy/install.sh). Ошибку сборки и запуска лучше увидеть здесь, чем
+      # на машине с одним ядром: там сборка идёт минуты.
+      - name: Стенд собирается, поднимается и отвечает
+        run: |
+          docker compose -f deploy/docker-compose.prod.yml up -d --build --wait
+          curl --fail --retry 15 --retry-delay 2 --retry-all-errors \
+               http://127.0.0.1:8000/login
+          docker compose -f deploy/docker-compose.prod.yml down -v
+        env:
+          # проверочные значения: стек поднимается на одну команду и гасится
+          POSTGRES_PASSWORD: ci-postgres-password
+          KTK_SECRET_KEY: ci-secret-key-длиной-не-меньше-32-байт
+          KTK_PASSWORD_OPERATOR: ci-operator-pass
+          KTK_PASSWORD_INSTRUCTOR: ci-instructor-pass
+          KTK_PASSWORD_ADMIN: ci-admin-pass
