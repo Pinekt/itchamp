@@ -11,3 +11,8 @@ asyncpg==0.29.0
 argon2-cffi==25.1.0     # Argon2id — хеширование паролей, лицензия MIT
 PyJWT==2.13.0           # токен сеанса HS256, лицензия MIT
 python-multipart==0.0.32  # разбор форм, лицензия Apache-2.0
+# --- библиотеки для рассчётов бэка
+numpy
+scipy
+matplotlib
+
