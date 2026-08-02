@@ -438,3 +438,132 @@ class ErrorAnalyzer:
                            "срабатывания сигнализации.",
             risk_score=_risk_from_seconds(seconds),
             predicted_alarm_s=round(seconds, 1))
+
+
+# ------------------------------------------------- адаптивный подбор сценария
+
+#: Какие классы ошибок отрабатывает сценарий — выводится из его отказов,
+#: а не задаётся отдельной таблицей. Тип отказа и определяет, чему сценарий
+#: учит: `pressure_up` ставит обучаемого перед ростом давления, `trip` — перед
+#: потерей насоса. Отдельное поле в БД пришлось бы поддерживать вручную и
+#: рассинхронизировать при первой же правке сценария.
+FAULT_TRAINS: dict[str, set[str]] = {
+    "pressure_up": {"pressure_runaway", "load_increase_under_alarm", "ack_without_fix"},
+    "trip": {"pump_off_under_load", "low_level_drain"},
+    "heater_off": {"temp_runaway"},
+}
+
+#: Сколько последних тренировок смотрим, разыскивая повторяющуюся ошибку.
+RECENT_WINDOW = 5
+
+#: Со скольких раз ошибка считается устойчивой, а не случайной.
+REPEAT_THRESHOLD = 2
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """
+    Что тренировать дальше и почему.
+
+    `why` обязательно: инструктор должен видеть основание, иначе подбор
+    выглядит как случайный выбор из списка и доверия к нему нет.
+    """
+    scenario: str
+    reason: str
+    why: str
+
+
+def _trains(scenario: dict) -> set[str]:
+    """Классы ошибок, которые отрабатывает сценарий."""
+    out: set[str] = set()
+    for fault in scenario.get("faults") or []:
+        out |= FAULT_TRAINS.get(fault.get("type", ""), set())
+    return out
+
+
+def _easiest(scenarios: list[dict]) -> dict:
+    return min(scenarios, key=lambda s: s.get("difficulty", 1))
+
+
+def recommend_scenario(history: list[dict], scenarios: list[dict]) -> Recommendation | None:
+    """
+    Подобрать следующий сценарий по истории обучаемого.
+
+    `history` — завершённые тренировки, свежие первыми (`storage.get_trainee_history`).
+    `scenarios` — доступные сценарии с полями `id`, `difficulty`, `faults`.
+
+    Правила по убыванию приоритета. Порядок не произвольный: сначала
+    закрываем то, что человек только что провалил, и лишь потом двигаемся
+    вперёд по сложности.
+
+      1. истории нет — начинаем с самого простого;
+      2. последняя тренировка не сдана — повторяем её же;
+      3. один и тот же класс ошибок повторяется — берём сценарий, который
+         его отрабатывает;
+      4. есть непройденные сценарии — следующий по возрастанию сложности;
+      5. пройдено всё — возвращаемся к сценарию с худшим баллом.
+    """
+    if not scenarios:
+        return None
+
+    by_code = {s["id"]: s for s in scenarios}
+
+    if not history:
+        s = _easiest(scenarios)
+        return Recommendation(
+            scenario=s["id"], reason="first_training",
+            why="Первая тренировка — начинаем с самого простого сценария.")
+
+    last = history[0]
+    if last.get("verdict") != "passed" and last["scenario_code"] in by_code:
+        return Recommendation(
+            scenario=last["scenario_code"], reason="repeat_failed",
+            why=f"Прошлая попытка не сдана ({last['total_score']:.0f} баллов). "
+                f"Повторяем тот же сценарий, пока он не отработан.")
+
+    # 3. Устойчивая ошибка — важнее движения по сложности: гонять человека
+    #    дальше, когда он раз за разом повторяет один промах, бессмысленно.
+    counts: dict[str, int] = {}
+    for row in history[:RECENT_WINDOW]:
+        for cls in (row.get("errors_by_class") or {}):
+            counts[cls] = counts.get(cls, 0) + 1
+    repeated = [c for c, n in counts.items() if n >= REPEAT_THRESHOLD]
+    if repeated:
+        # самый частый класс, при равенстве — по имени, чтобы подбор был
+        # воспроизводимым, а не зависел от порядка обхода словаря
+        worst = sorted(repeated, key=lambda c: (-counts[c], c))[0]
+        for s in sorted(scenarios, key=lambda x: x.get("difficulty", 1)):
+            if worst in _trains(s):
+                cls = CATALOGUE.get(worst)
+                title = cls.message.rstrip(".") if cls else worst
+                return Recommendation(
+                    scenario=s["id"], reason="repeated_error",
+                    why=f"Ошибка «{title}» повторяется "
+                        f"{counts[worst]} раза из последних "
+                        f"{min(len(history), RECENT_WINDOW)}. "
+                        f"Этот сценарий её отрабатывает.")
+
+    done = {row["scenario_code"] for row in history}
+    fresh = [s for s in scenarios if s["id"] not in done]
+    if fresh:
+        s = _easiest(fresh)
+        return Recommendation(
+            scenario=s["id"], reason="next_difficulty",
+            why="Предыдущий сценарий сдан. Следующий по сложности "
+                "из ещё не пройденных.")
+
+    # 5. Всё пройдено — возвращаемся туда, где результат был худшим.
+    best_by_code: dict[str, float] = {}
+    for row in history:
+        code = row["scenario_code"]
+        best_by_code[code] = max(best_by_code.get(code, 0.0), row["total_score"])
+    weakest = min((c for c in best_by_code if c in by_code),
+                  key=lambda c: (best_by_code[c], c), default=None)
+    if weakest is None:
+        return Recommendation(
+            scenario=_easiest(scenarios)["id"], reason="fallback",
+            why="Все сценарии пройдены. Повторяем с начала.")
+    return Recommendation(
+        scenario=weakest, reason="weakest_result",
+        why=f"Все сценарии пройдены. Лучший результат по этому — "
+            f"{best_by_code[weakest]:.0f} баллов, он и остаётся самым слабым.")

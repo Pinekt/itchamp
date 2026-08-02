@@ -503,6 +503,46 @@ async def get_assessment(session_id: str) -> dict | None:
             avg_reaction_ms=r.avg_reaction_ms, verdict=r.verdict, details=r.details)
 
 
+# --------------------------------------------------- история обучаемого
+
+async def get_trainee_history(user_id: int, limit: int = 20) -> list[dict]:
+    """
+    Завершённые тренировки обучаемого с их оценками — вход для подбора
+    следующего сценария. Свежие первыми.
+
+    Тренировки без оценки пропускаются: по ним нечего анализировать, а
+    попасть сюда они могут — например, тренировка, идущая прямо сейчас.
+    """
+    async with Session() as s:
+        sessions = (await s.execute(
+            select(TrainingSession)
+            .where(TrainingSession.user_id == user_id)
+            .order_by(TrainingSession.started_at.desc())
+            .limit(limit))).scalars().all()
+        if not sessions:
+            return []
+
+        # Оценки берём одним запросом: по запросу на тренировку — это
+        # двадцать походов в базу там, где хватает одного.
+        rows = (await s.execute(
+            select(Assessment)
+            .where(Assessment.session_id.in_([x.id for x in sessions]))
+            .order_by(Assessment.id))).scalars().all()
+        by_session = {a.session_id: a for a in rows}   # останется последняя
+
+        out = []
+        for x in sessions:
+            a = by_session.get(x.id)
+            if a is None:
+                continue
+            out.append(dict(
+                session_id=x.id, scenario_code=x.scenario_code, status=x.status,
+                started_at=str(x.started_at), total_score=a.total_score,
+                verdict=a.verdict,
+                errors_by_class=(a.details or {}).get("errors_by_class", {})))
+        return out
+
+
 # ------------------------------------------------------------ разбор тренировки
 
 def hide_steps(assessment: dict | None) -> dict | None:

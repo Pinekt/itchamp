@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, RedirectResponse
@@ -24,7 +25,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from .models import ControlCommand, OperatorAction, WSMessage, WSMessageType
 from .session import TrainingSession
 from .scenarios import SCENARIOS
-from . import admin, auth, db, storage, seed
+from . import admin, ai_module, auth, db, storage, seed
 from .auth import current_user, optional_user, require_role
 
 
@@ -56,11 +57,47 @@ SUPERVISOR_ROLES = ("instructor", "admin")
 
 # ------------------------------------------------------------------ сценарии
 
+async def _available_scenarios() -> list[dict]:
+    """Сценарии из БД, а если она ещё не наполнена — встроенный каталог."""
+    rows = await storage.list_scenarios()
+    return rows if rows else [s.model_dump() for s in SCENARIOS]
+
+
 @app.get("/api/scenarios")
 async def list_scenarios(user: dict = Depends(current_user)):
     """Сценарии из БД (инструктор может добавлять свои)."""
-    rows = await storage.list_scenarios()
-    return rows if rows else [s.model_dump() for s in SCENARIOS]
+    return await _available_scenarios()
+
+
+@app.get("/api/recommendation")
+async def recommendation(request: Request, user_id: int | None = None,
+                         user: dict = Depends(current_user)):
+    """
+    Какой сценарий тренировать следующим — подбор по истории ошибок.
+
+    Без параметра отвечает про самого себя. `user_id` — чужая история, поэтому
+    доступен только инструктору и администратору: по рекомендации видно, что
+    человек проваливает, а это часть его результатов.
+
+    Возвращает `null` в поле `recommendation`, если подобрать нечего (нет ни
+    одного сценария) — интерфейс в этом случае просто ничего не показывает.
+    """
+    target = user["id"]
+    if user_id is not None and user_id != user["id"]:
+        if user["role"] not in SUPERVISOR_ROLES:
+            await storage.audit(user["id"], "access_denied",
+                                {"path": request.url.path, "target": user_id,
+                                 "reason": "чужая история тренировок"},
+                                ip=auth.client_ip(request))
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Недостаточно прав")
+        target = user_id
+
+    history = await storage.get_trainee_history(target)
+    rec = ai_module.recommend_scenario(history, await _available_scenarios())
+    return {"user_id": target,
+            "trainings": len(history),
+            "recommendation": None if rec is None else asdict(rec)}
 
 
 @app.get("/api/scenarios/{code}/reference")

@@ -103,6 +103,8 @@
         <button class="sec" onclick="sess('reset')">Сброс</button>
         <button class="sec" onclick="sess('stop')">Завершить</button>
       </div>
+      <div id="recBox" style="display:none;font-size:12px;color:var(--muted);
+           border-left:2px solid #8ea2ff;padding:4px 0 4px 8px;margin:6px 0"></div>
       <div class="controls">
         <button onclick="cmd('start')">Пуск процесса</button>
         <button class="stop" onclick="cmd('stop')">Останов</button>
@@ -182,6 +184,7 @@ function showAssessment(a){
     (a.avg_reaction_ms!=null?`, средняя реакция ${a.avg_reaction_ms} мс`:'')+
     `<br><a href="/debrief?session=${encodeURIComponent(a.session_id)}"
         style="color:#8ea2ff">Открыть разбор тренировки →</a>`;
+  loadScenarios();   // история пополнилась — подбор следующего изменился
 }
 function cmd(action,target=null,value=null){
   if(ws&&ws.readyState===1) ws.send(JSON.stringify({action,target,value}));
@@ -195,6 +198,26 @@ async function loadScenarios(){
   if(!r.ok){location.href='/login'; return;}
   const list=await r.json();
   $('scenSel').innerHTML=list.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  showRecommendation(list);
+}
+// Что тренировать дальше — подбор по истории ошибок (ИИ-модуль).
+// Отдельным запросом и без await в loadScenarios: список сценариев должен
+// появиться в любом случае, даже если подбор не ответил.
+async function showRecommendation(list){
+  let rec=null;
+  try{
+    const r=await fetch('/api/recommendation');
+    if(!r.ok) return;
+    rec=(await r.json()).recommendation;
+  }catch(e){ return; }
+  const s=rec && list.find(x=>x.id===rec.scenario);
+  if(!s) return;
+  $('scenSel').value=s.id;      // подставляем, но не запускаем: решает человек
+  const box=$('recBox');
+  // textContent, а не innerHTML: строка приходит с сервера и в разметку
+  // попадать не должна
+  box.textContent='Рекомендуется: '+s.name+'. '+rec.why;
+  box.style.display='';
 }
 function renderState(s){
   $('clock').textContent=s.t;
