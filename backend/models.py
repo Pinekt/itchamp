@@ -82,6 +82,12 @@ class AIFeedback(BaseModel):
     message: str = ""            # интерпретируемое объяснение «почему неверно»
     recommendation: Optional[str] = None
     risk_score: Optional[float] = Field(None, description="Прогноз риска ошибки 0..1")
+    # Поля добавлены опциональными, чтобы не ломать уже написанный код:
+    # интерфейс и хранилище работают и без них.
+    reference: Optional[str] = Field(
+        None, description="Пункт технологического регламента, которым обосновано")
+    predicted_alarm_s: Optional[float] = Field(
+        None, description="Прогноз: через сколько секунд параметр достигнет уставки")
 
 
 # ---------- Сценарии обучения ----------

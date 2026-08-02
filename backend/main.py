@@ -372,6 +372,7 @@ async def ws(websocket: WebSocket):
                     async with tick_lock:
                         ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
                         if ok:
+                            sess.load_reference(await storage.get_reference_steps(code))
                             sess.session_id = await storage.create_session(
                                 sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
                             last_event_t = time.time()
@@ -404,6 +405,8 @@ async def ws(websocket: WebSocket):
             reaction = int((time.time() - last_event_t) * 1000)
             action = OperatorAction(t=sess.engine.t, action=cmd.action,
                                     target=cmd.target, value=cmd.value, reaction_ms=reaction)
+            # ИИ разбирает действие на ближайшем такте, в контексте состояния
+            sess.record_action(action)
             if sess.session_id:
                 await storage.save_action(sess.session_id, action)
             await websocket.send_text(WSMessage(

@@ -426,7 +426,8 @@ function renderErrors(){
       ${e.recommendation?`<div class="muted" style="font-size:12px;margin-top:3px">
         Рекомендация: ${esc(e.recommendation)}</div>`:''}
       <div class="muted" style="font-size:11px;margin-top:3px">
-        ${esc(e.location||'—')}${e.risk_score!=null?` · риск ${Math.round(e.risk_score*100)}%`:''}</div>
+        ${esc(e.location||'—')}${e.risk_score!=null?` · риск ${Math.round(e.risk_score*100)}%`:''}
+        ${e.reference?' · '+esc(e.reference):''}</div>
     </div>`;
   }).join('');
 }

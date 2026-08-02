@@ -214,8 +214,15 @@ function renderState(s){
 }
 function renderFeed(f){
   const el=$('feed'); el.className='feed '+f.severity;
+  // прогноз показываем отдельной строкой: это предупреждение ДО аварии,
+  // и оператору важно видеть, сколько у него осталось времени
+  const forecast = f.predicted_alarm_s!=null
+    ? `<br><b>До уставки ≈ ${Math.round(f.predicted_alarm_s)} с</b>` : '';
   el.innerHTML=(f.error_detected?'<b>⚠ Ошибка: '+(f.error_class||'')+'</b><br>':'')+
-    f.message+(f.recommendation?'<br><i>Рекомендация: '+f.recommendation+'</i>':'');
+    f.message+forecast+
+    (f.recommendation?'<br><i>Рекомендация: '+f.recommendation+'</i>':'')+
+    (f.reference?'<br><span style="font-size:11px;color:var(--muted)">Основание: '
+                 +f.reference+'</span>':'');
   $('riskBar').style.width=Math.round((f.risk_score||0)*100)+'%';
 }
 function logAction(a){

@@ -283,14 +283,26 @@ async def get_journal(session_id: str) -> list[dict]:
 
 
 async def get_errors(session_id: str) -> list[dict]:
+    """
+    Ошибки тренировки. Ссылка на пункт регламента подставляется из справочника
+    классов, а не хранится в записи: она свойство класса ошибки, а не
+    конкретного срабатывания. Хранить её в строке значило бы дублировать данные
+    и получить расхождение, как только формулировку в справочнике поправят.
+    """
+    from .ai_module import CATALOGUE
+
     async with Session() as s:
         rows = (await s.execute(select(DetectedError)
                 .where(DetectedError.session_id == session_id)
                 .order_by(DetectedError.t))).scalars().all()
-        return [dict(t=r.t, error_class=r.error_class, location=r.location,
-                     severity=r.severity, message=r.message,
-                     recommendation=r.recommendation, risk_score=r.risk_score)
-                for r in rows]
+        out = []
+        for r in rows:
+            cls = CATALOGUE.get(r.error_class)
+            out.append(dict(t=r.t, error_class=r.error_class, location=r.location,
+                            severity=r.severity, message=r.message,
+                            recommendation=r.recommendation, risk_score=r.risk_score,
+                            reference=cls.reference if cls else None))
+        return out
 
 
 #: Предел выборки телеметрии за одну тренировку. Час записи с шагом 1 с — это
