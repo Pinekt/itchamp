@@ -39,6 +39,34 @@
   .journal div{padding:5px 0;border-bottom:1px solid var(--line);color:var(--muted)}
   .journal b{color:var(--txt)}
   svg text{fill:var(--txt);font-size:11px}
+  /* ---------------------------------------------------------- мнемосхема */
+  .mnemo{width:100%;height:auto;display:block}
+  /* Трубопроводы и потоки нарисованы одними и теми же путями: поток — это
+     <use> на ту же геометрию. Обводка задана на группе, а не на самом пути,
+     иначе клон внутри <use> унаследовал бы цвет трубы и поток был бы не виден. */
+  .pipes{fill:none;stroke:var(--pipe);stroke-width:7;stroke-linecap:round}
+  .streams{fill:none;stroke:#5aa9f0;stroke-width:3;stroke-dasharray:9 15;opacity:0}
+  .streams.on{opacity:.9}
+  .streams.on use{animation:stream 1.2s linear infinite}
+  @keyframes stream{to{stroke-dashoffset:-24}}
+  .vessel{fill:#141b27;stroke:#4a5772;stroke-width:2}
+  .metal{fill:#222b3a;stroke:#4a5772;stroke-width:2}
+  .coil{fill:none;stroke:#6b7a99;stroke-width:3}
+  .tray{stroke:#39455e;stroke-width:2}
+  .eq-name{fill:var(--txt);font-size:12px;font-weight:700;text-anchor:middle}
+  .eq-label{fill:var(--muted);font-size:10px;text-anchor:middle}
+  .prod{fill:var(--muted);font-size:10px}
+  .sensor circle{fill:#10161f;stroke:#4a5772;stroke-width:2}
+  .sensor .code{fill:var(--muted);font-size:9px;text-anchor:middle}
+  .sensor .val{fill:var(--txt);font-size:11px;font-weight:600}
+  .lead{stroke:#4a5772;stroke-width:1;stroke-dasharray:3 3}
+  .clickable{cursor:pointer}
+  /* авария подсвечивает и аппарат, и относящийся к нему датчик */
+  .alarm .vessel,.alarm .metal,.alarm circle{stroke:var(--err)}
+  .alarm .eq-name,.alarm .val{fill:var(--err)}
+  .alarm{animation:eqblink 1s infinite}
+  @keyframes eqblink{50%{opacity:.5}}
+  #flame{transition:opacity .4s}
   .user{font-size:12px;color:var(--muted)} .user b{color:var(--txt)}
   /* элементы только для инструктора/администратора — показываются по роли */
   [data-role]{display:none}
@@ -61,31 +89,139 @@
   <div>
     <div class="panel">
       <h2>Мнемосхема</h2>
-      <svg viewBox="0 0 520 300" width="100%">
-        <!-- сырьё -->
-        <line x1="20" y1="230" x2="120" y2="230" stroke="#3a4a63" stroke-width="6"/>
-        <rect x="120" y="215" width="34" height="30" rx="4" fill="#222b3a" stroke="#4a5772"/>
-        <text x="126" y="210">Насос</text>
-        <circle id="pumpLed" cx="137" cy="230" r="6" fill="#555"/>
-        <line x1="154" y1="230" x2="220" y2="230" stroke="#3a4a63" stroke-width="6"/>
-        <!-- клапан -->
-        <polygon points="220,222 238,230 220,238" fill="#4a5772"/>
-        <polygon points="256,222 238,230 256,238" fill="#4a5772"/>
-        <text x="212" y="258">Клапан</text>
-        <line x1="256" y1="230" x2="300" y2="230" stroke="#3a4a63" stroke-width="6"/>
-        <!-- колонна -->
-        <rect x="300" y="60" width="70" height="190" rx="14" fill="#141b27" stroke="#4a5772" stroke-width="2"/>
-        <rect id="levelFill" x="302" y="180" width="66" height="68" rx="12" fill="#25406b" opacity=".8"/>
-        <text x="312" y="52">Колонна</text>
-        <line x1="335" y1="250" x2="335" y2="270" stroke="#3a4a63" stroke-width="6"/>
-        <rect x="315" y="270" width="40" height="18" rx="3" fill="#222b3a" stroke="#4a5772"/>
-        <text x="322" y="283" style="font-size:9px">Нагрев</text>
-        <!-- верх: пар -->
-        <line x1="370" y1="90" x2="460" y2="90" stroke="#3a4a63" stroke-width="6"/>
-        <text x="410" y="82">дистиллят</text>
-        <!-- датчики -->
-        <text x="378" y="150" id="pTag" style="fill:#8a94a8">P —</text>
-        <text x="378" y="170" id="tTag" style="fill:#8a94a8">T —</text>
+      <svg class="mnemo" viewBox="0 0 950 404" role="img"
+           aria-label="Технологическая схема установки ЭЛОУ-АВТ">
+        <!-- Трубопроводы. Те же пути переиспользуются ниже для анимации
+             потока, поэтому у каждого есть идентификатор. -->
+        <g class="pipes">
+          <path id="pFeed"    d="M 8 330 H 148"/>
+          <path id="pToElou"  d="M 182 330 H 215"/>
+          <path id="pToHx"    d="M 319 330 H 356"/>
+          <path id="pToFurn"  d="M 404 330 H 436"/>
+          <path id="pToCol"   d="M 540 330 H 556 V 250 H 580"/>
+          <path id="pBenz"    d="M 676 78 H 790"/>
+          <path id="pKero"    d="M 676 150 H 790"/>
+          <path id="pDiesel"  d="M 676 225 H 790"/>
+          <path id="pMazut"   d="M 628 374 V 392 H 790"/>
+        </g>
+
+        <!-- Э-1: электродегидратор (обессоливание и обезвоживание нефти) -->
+        <g id="eqElou">
+          <rect class="vessel" x="215" y="306" width="104" height="48" rx="24"/>
+          <line x1="248" y1="316" x2="248" y2="344" stroke="#6b7a99" stroke-width="2"/>
+          <line x1="286" y1="316" x2="286" y2="344" stroke="#6b7a99" stroke-width="2"/>
+          <text class="eq-name" x="267" y="335">Э-1</text>
+          <text class="eq-label" x="267" y="370">ЭЛОУ · обессоливание</text>
+        </g>
+
+        <!-- Т-1: теплообменник подогрева сырья -->
+        <g id="eqHx">
+          <circle class="vessel" cx="380" cy="330" r="24"/>
+          <path class="coil" d="M 362 330 L 370 318 L 380 342 L 390 318 L 398 330"/>
+          <text class="eq-label" x="380" y="370">Т-1 · теплообменник</text>
+        </g>
+
+        <!-- П-1: трубчатая печь, змеевик и горелки -->
+        <g id="eqFurnace">
+          <text class="eq-name" x="488" y="264">П-1</text>
+          <text class="eq-label" x="488" y="278">печь</text>
+          <rect class="metal" x="436" y="284" width="104" height="88" rx="6"/>
+          <path class="coil" d="M 448 298 H 528 V 314 H 448 V 330 H 528 V 346 H 448"/>
+          <g id="flame" style="opacity:0">
+            <path d="M 462 366 q 6 -16 12 0 q -6 8 -12 0" fill="#e8833a"/>
+            <path d="M 482 366 q 6 -20 12 0 q -6 8 -12 0" fill="#f0a548"/>
+            <path d="M 502 366 q 6 -16 12 0 q -6 8 -12 0" fill="#e8833a"/>
+          </g>
+        </g>
+
+        <!-- К-1: атмосферная колонна. Тарелки, ввод сырья, куб с уровнем -->
+        <g id="eqColumn">
+          <text class="eq-name" x="628" y="26">К-1</text>
+          <text class="eq-label" x="628" y="40">атмосферная колонна</text>
+          <rect class="vessel" x="580" y="48" width="96" height="326" rx="18"/>
+          <!-- пустой до первого снимка телеметрии: показывать уровень,
+               которого ещё не измеряли, нельзя -->
+          <rect id="levelFill" x="582" y="374" width="92" height="0" fill="#25406b" opacity=".75"/>
+          <g class="tray">
+            <line x1="588" y1="96"  x2="668" y2="96"/>
+            <line x1="588" y1="120" x2="668" y2="120"/>
+            <line x1="588" y1="144" x2="668" y2="144"/>
+            <line x1="588" y1="168" x2="668" y2="168"/>
+            <line x1="588" y1="192" x2="668" y2="192"/>
+            <line x1="588" y1="216" x2="668" y2="216"/>
+            <line x1="588" y1="240" x2="668" y2="240"/>
+          </g>
+        </g>
+
+        <text class="prod" x="8" y="318">Нефть</text>
+
+        <!-- Насос сырья Н-1 (PUMP_1) — по нажатию включается и выключается.
+             Прозрачный прямоугольник поверх задаёт область нажатия: у самих
+             фигур попасть можно только в обводку, а мимо тонкой линии
+             промахивается и мышь, и палец. -->
+        <g id="eqPump" class="clickable" onclick="togglePump()">
+          <title>Насос сырья Н-1 — нажмите, чтобы включить или остановить</title>
+          <text class="eq-name" x="86" y="296">Н-1</text>
+          <text class="eq-label" x="86" y="308">насос сырья</text>
+          <circle class="metal" cx="86" cy="330" r="19"/>
+          <polygon id="pumpLed" points="79,321 79,339 97,330" fill="#555"/>
+          <rect x="63" y="288" width="46" height="64" fill="transparent"/>
+        </g>
+
+        <!-- Клапан подачи сырья (VALVE_FEED) -->
+        <g id="eqValve">
+          <rect class="metal" x="158" y="304" width="14" height="10" rx="2"/>
+          <line x1="165" y1="314" x2="165" y2="322" stroke="#4a5772" stroke-width="2"/>
+          <polygon points="148,320 165,330 148,340" fill="#4a5772"/>
+          <polygon points="182,320 165,330 182,340" fill="#4a5772"/>
+          <text class="eq-label" id="valveTag" x="165" y="362">Клапан сырья</text>
+        </g>
+
+        <!-- Потоки: та же геометрия, что у труб, только пунктиром и в движении.
+             Отборы продуктов идут отдельной группой — они появляются, только
+             когда процесс пущен, а не просто есть подача сырья. -->
+        <g id="feedFlow" class="streams">
+          <use href="#pFeed"/><use href="#pToElou"/><use href="#pToHx"/>
+          <use href="#pToFurn"/><use href="#pToCol"/>
+        </g>
+        <g id="prodFlow" class="streams">
+          <use href="#pBenz"/><use href="#pKero"/>
+          <use href="#pDiesel"/><use href="#pMazut"/>
+        </g>
+
+        <!-- Отборы -->
+        <text class="prod" x="798" y="74">Бензин</text>
+        <text class="prod" x="798" y="146">Керосин</text>
+        <text class="prod" x="798" y="221">Дизельное топливо</text>
+        <text class="prod" x="798" y="396">Мазут</text>
+
+        <!-- Приборы. Пузырёк ставится только там, где есть настоящее
+             измерение: расход сырья, давление верха, температура и уровень
+             куба К-1. Прочие аппараты показаны без КИП — как на схеме. -->
+        <g class="sensor" id="sFI">
+          <line class="lead" x1="198" y1="301" x2="198" y2="326"/>
+          <circle cx="198" cy="286" r="15"/>
+          <text class="code" x="198" y="290">FI</text>
+          <text class="val" x="198" y="260" text-anchor="middle" id="mF">—</text>
+        </g>
+        <g class="sensor" id="sPI">
+          <line class="lead" x1="676" y1="110" x2="691" y2="110"/>
+          <circle cx="706" cy="110" r="15"/>
+          <text class="code" x="706" y="114">PI</text>
+          <text class="val" x="726" y="114" id="mP">—</text>
+        </g>
+        <g class="sensor" id="sTI">
+          <line class="lead" x1="676" y1="290" x2="691" y2="290"/>
+          <circle cx="706" cy="290" r="15"/>
+          <text class="code" x="706" y="294">TI</text>
+          <text class="val" x="726" y="294" id="mT">—</text>
+        </g>
+        <g class="sensor" id="sLI">
+          <line class="lead" x1="676" y1="348" x2="691" y2="348"/>
+          <circle cx="706" cy="348" r="15"/>
+          <text class="code" x="706" y="352">LI</text>
+          <text class="val" x="726" y="352" id="mL">—</text>
+        </g>
       </svg>
     </div>
 
@@ -219,21 +355,55 @@ async function showRecommendation(list){
   box.textContent='Рекомендуется: '+s.name+'. '+rec.why;
   box.style.display='';
 }
+// Насос переключается и нажатием на схеме — как на настоящем рабочем месте.
+// Текущее положение помним здесь: команда одна и та же на включение и на
+// останов, а без состояния нажатие пришлось бы угадывать.
+let pumpOn=true;
+function togglePump(){ cmd('set_pump','PUMP_1', pumpOn?0:1); }
+
+function mark(id,on){ $(id).classList.toggle('alarm', !!on); }
+
 function renderState(s){
   $('clock').textContent=s.t;
   $('vP').textContent=s.pressure; $('vT').textContent=s.temperature;
   $('vF').textContent=s.flow;     $('vL').textContent=s.level;
-  $('pTag').textContent='P '+s.pressure; $('tTag').textContent='T '+s.temperature;
   $('run').textContent=s.running?'В РАБОТЕ':'ОСТАНОВ';
   $('run').className='badge '+(s.running?'on':'off');
-  const led=$('pumpLed'); const pump=(s.equipment||[]).find(e=>e.id==='PUMP_1');
-  led.setAttribute('fill', pump&&pump.on ? '#28c76f':'#555');
-  // уровень в колонне
-  const h=1.9*s.level; $('levelFill').setAttribute('y',248-h); $('levelFill').setAttribute('height',h);
-  // подсветка аварий
-  $('gP').className='g'+(s.alarms.includes('HIGH_PRESSURE')?' alarm':'');
-  $('gL').className='g'+(s.alarms.some(a=>a.includes('LEVEL'))?' alarm':'');
-  $('gT').className='g'+(s.alarms.includes('HIGH_TEMP')?' alarm':'');
+
+  // показания у приборов на схеме
+  $('mP').textContent=s.pressure+' кПа'; $('mT').textContent=s.temperature+' °C';
+  $('mF').textContent=s.flow+' м³/ч';    $('mL').textContent=s.level+' %';
+
+  const eq=id=>(s.equipment||[]).find(e=>e.id===id);
+  const pump=eq('PUMP_1'), valve=eq('VALVE_FEED'), heater=eq('HEATER_1');
+  pumpOn = !!(pump && pump.on);
+  $('pumpLed').setAttribute('fill', pumpOn ? '#28c76f':'#555');
+  if(valve) $('valveTag').textContent='Клапан сырья · '+valve.position+' %';
+  $('flame').style.opacity = (heater && heater.on && s.running) ? 1 : 0;
+
+  // Движение в трубопроводах. Сырьё идёт, пока есть расход; отборы — только
+  // на пущенной установке: на остановленной продуктов из колонны нет.
+  const moving=s.flow>1;
+  $('feedFlow').classList.toggle('on', moving);
+  $('prodFlow').classList.toggle('on', moving && s.running);
+  // чем больше расход, тем быстрее бежит пунктир
+  const period=Math.max(0.35, 2.2 - s.flow/90).toFixed(2)+'s';
+  document.querySelectorAll('.streams use')
+          .forEach(u=>{u.style.animationDuration=period;});
+
+  // уровень в кубе колонны: 100 % — 100 px, низ аппарата на y = 374
+  const h=Math.max(0,Math.min(100,s.level));
+  $('levelFill').setAttribute('y',374-h); $('levelFill').setAttribute('height',h);
+
+  // подсветка аварий — и на приборах панели, и на схеме
+  const hiP=s.alarms.includes('HIGH_PRESSURE');
+  const badL=s.alarms.some(a=>a.includes('LEVEL'));
+  const hiT=s.alarms.includes('HIGH_TEMP');
+  $('gP').className='g'+(hiP?' alarm':'');
+  $('gL').className='g'+(badL?' alarm':'');
+  $('gT').className='g'+(hiT?' alarm':'');
+  mark('sPI',hiP); mark('sLI',badL); mark('sTI',hiT);
+  mark('eqColumn', hiP||badL||hiT); mark('eqFurnace', hiT);
 }
 function renderFeed(f){
   const el=$('feed'); el.className='feed '+f.severity;
