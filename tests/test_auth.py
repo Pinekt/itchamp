@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from backend import security
-from conftest import login_as
+from conftest import as_json, login_as
 
 
 # ------------------------------------------------------------------- вход
@@ -149,10 +149,14 @@ def test_operator_cannot_open_foreign_session(client):
     """Чужую тренировку оператор не откроет — 403 и запись в аудите."""
     # тренировку заводит инструктор
     login_as(client, "instructor")
+    instructor_id = client.get("/api/me").json()["id"]
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"session_action": "start", "scenario": "startup"})
         ws.receive_json()
-    foreign = client.get("/api/sessions").json()[0]["id"]
+    # именно свою, а не первую в списке: инструктор видит все тренировки,
+    # и полагаться на порядок выдачи здесь незачем
+    foreign = next(s["id"] for s in client.get("/api/sessions").json()
+                   if s["user_id"] == instructor_id)
 
     client.cookies.clear()
     login_as(client, "operator")
@@ -230,7 +234,8 @@ def test_audit_records_failed_login_with_attempt_number(client, db_query):
     event, details = db_query("SELECT event, details FROM audit_log "
                               "WHERE event='login_failed' ORDER BY id DESC LIMIT 1")[0]
     assert event == "login_failed"
-    assert '"login": "admin"' in details and '"attempt": 1' in details
+    details = as_json(details)
+    assert details["login"] == "admin" and details["attempt"] == 1
 
 
 def test_audit_records_lockout(client, db_query):
@@ -246,7 +251,9 @@ def test_audit_records_access_denied(client, db_query):
     event, details = db_query("SELECT event, details FROM audit_log "
                               "WHERE event='access_denied' ORDER BY id DESC LIMIT 1")[0]
     assert event == "access_denied"
-    assert "reference" in details
+    details = as_json(details)
+    assert details["path"].endswith("/reference")
+    assert details["role"] == "operator"
 
 
 def test_audit_records_logout(client, db_query):

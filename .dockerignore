@@ -6,3 +6,7 @@ __pycache__
 .DS_Store
 docs
 *.md
+# секреты стенда не должны попадать в слой образа
+.env
+deploy/.env
+deploy/docker-compose.prod.yml

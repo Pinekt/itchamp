@@ -12,10 +12,12 @@ FastAPI + WebSocket: сессии тренировки, исполнение с�
 from __future__ import annotations
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, RedirectResponse
@@ -23,8 +25,15 @@ from fastapi.responses import FileResponse, RedirectResponse
 from .models import ControlCommand, OperatorAction, WSMessage, WSMessageType
 from .session import TrainingSession
 from .scenarios import SCENARIOS
-from . import auth, db, storage, seed
+from . import admin, ai_module, auth, db, storage, seed
 from .auth import current_user, optional_user, require_role
+
+
+#: Задачи, дописывающие данные после обрыва соединения (см. `_run_detached`).
+#: Ссылки нужно держать: цикл событий хранит на задачи только слабые ссылки,
+#: и без этого сборщик мусора может убрать задачу до того, как она отработает.
+_background: set[asyncio.Task] = set()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,10 +41,14 @@ async def lifespan(app: FastAPI):
     await db.init_db()
     await seed.seed()
     yield
+    # при остановке даём фоновым задачам дописать закрытие тренировок
+    if _background:
+        await asyncio.wait(set(_background), timeout=5.0)
 
 
-app = FastAPI(title="КТК ЭЛОУ-АВТ", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="КТК ЭЛОУ-АВТ", version="0.5.0", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(admin.router)
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 
 #: Роли, которым доступны чужие тренировки и эталонные шаги.
@@ -44,11 +57,47 @@ SUPERVISOR_ROLES = ("instructor", "admin")
 
 # ------------------------------------------------------------------ сценарии
 
+async def _available_scenarios() -> list[dict]:
+    """Сценарии из БД, а если она ещё не наполнена — встроенный каталог."""
+    rows = await storage.list_scenarios()
+    return rows if rows else [s.model_dump() for s in SCENARIOS]
+
+
 @app.get("/api/scenarios")
 async def list_scenarios(user: dict = Depends(current_user)):
     """Сценарии из БД (инструктор может добавлять свои)."""
-    rows = await storage.list_scenarios()
-    return rows if rows else [s.model_dump() for s in SCENARIOS]
+    return await _available_scenarios()
+
+
+@app.get("/api/recommendation")
+async def recommendation(request: Request, user_id: int | None = None,
+                         user: dict = Depends(current_user)):
+    """
+    Какой сценарий тренировать следующим — подбор по истории ошибок.
+
+    Без параметра отвечает про самого себя. `user_id` — чужая история, поэтому
+    доступен только инструктору и администратору: по рекомендации видно, что
+    человек проваливает, а это часть его результатов.
+
+    Возвращает `null` в поле `recommendation`, если подобрать нечего (нет ни
+    одного сценария) — интерфейс в этом случае просто ничего не показывает.
+    """
+    target = user["id"]
+    if user_id is not None and user_id != user["id"]:
+        if user["role"] not in SUPERVISOR_ROLES:
+            await storage.audit(user["id"], "access_denied",
+                                {"path": request.url.path, "target": user_id,
+                                 "reason": "чужая история тренировок"},
+                                ip=auth.client_ip(request))
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Недостаточно прав")
+        target = user_id
+
+    history = await storage.get_trainee_history(target)
+    rec = ai_module.recommend_scenario(history, await _available_scenarios())
+    return {"user_id": target,
+            "trainings": len(history),
+            "recommendation": None if rec is None else asdict(rec)}
 
 
 @app.get("/api/scenarios/{code}/reference")
@@ -107,7 +156,63 @@ async def session_assessment(session_id: str, request: Request,
                              user: dict = Depends(current_user)):
     """Оценка квалификации по итогам тренировки (создаётся при завершении)."""
     await _ensure_session_access(session_id, user, request)
-    return await storage.get_assessment(session_id) or {"detail": "оценка ещё не сформирована"}
+    assessment = await storage.get_assessment(session_id)
+    if assessment is None:
+        return {"detail": "оценка ещё не сформирована"}
+    if user["role"] not in SUPERVISOR_ROLES:
+        assessment = storage.hide_steps(assessment)
+    return assessment
+
+
+@app.get("/api/sessions/{session_id}/telemetry")
+async def session_telemetry(session_id: str, request: Request,
+                            user: dict = Depends(current_user)):
+    """История параметров установки — данные для графика на разборе."""
+    await _ensure_session_access(session_id, user, request)
+    return await storage.get_telemetry(session_id)
+
+
+@app.get("/api/sessions/{session_id}/debrief")
+async def session_debrief(session_id: str, request: Request,
+                          user: dict = Depends(current_user)):
+    """
+    Разбор тренировки одним ответом: шапка, журнал, телеметрия, ошибки, оценка.
+
+    Эталонные шаги добавляются только инструктору и администратору — оператору
+    они закрыты и здесь, иначе разбор стал бы обходом `/reference`. Разбор
+    собственных шагов обучаемый видит после того, как инструктор открыл его
+    (см. `POST /api/sessions/{id}/release`).
+    """
+    await _ensure_session_access(session_id, user, request)
+    data = await storage.get_debrief(session_id)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Тренировка не найдена")
+    if user["role"] in SUPERVISOR_ROLES:
+        data["reference"] = await storage.get_reference_steps(data["session"]["scenario_code"])
+    else:
+        data["assessment"] = storage.hide_steps(data["assessment"])
+    return data
+
+
+@app.post("/api/sessions/{session_id}/release")
+async def release_debrief(session_id: str, request: Request,
+                          user: dict = Depends(require_role(*SUPERVISOR_ROLES))):
+    """
+    Открыть обучаемому разбор его эталонных шагов — действие инструктора.
+    До этого оператор видит балл и сводку, но не правильную последовательность.
+    """
+    owner = await storage.get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Тренировка не найдена")
+    if not await storage.release_debrief(session_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Оценка ещё не сформирована")
+    await storage.audit(user["id"], "debrief_released",
+                        {"session": session_id, "trainee": owner["operator"]},
+                        ip=auth.client_ip(request))
+    return {"detail": "Разбор открыт обучаемому"}
 
 
 # ------------------------------------------------------------------ интерфейс
@@ -125,10 +230,60 @@ async def index(user: dict | None = Depends(optional_user)):
     return FileResponse(FRONTEND / "index.html")
 
 
+@app.get("/debrief")
+async def debrief_page(user: dict | None = Depends(optional_user)):
+    """Экран разбора тренировки. Данные тянет из `/api/sessions/{id}/debrief`."""
+    if user is None:
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    return FileResponse(FRONTEND / "debrief.html")
+
+
+@app.get("/admin")
+async def admin_page(user: dict | None = Depends(optional_user)):
+    """
+    Администрирование: учётные записи и журнал аудита.
+
+    Страница отдаётся любому вошедшему, но данные на ней закрыты ролью — сами
+    `/api/users` и `/api/audit` требуют admin и пишут отказ в аудит. Прятать
+    ещё и HTML смысла нет: в нём нет ничего, кроме разметки и запросов.
+    """
+    if user is None:
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    return FileResponse(FRONTEND / "admin.html")
+
+
 # ----------------------------------------------------------------- WebSocket
 
 #: Код закрытия WS при отсутствии действующего сеанса (свободный диапазон 4000+).
 WS_UNAUTHORIZED = 4401
+
+#: Период выдачи состояния установки, с. Один такт — это всегда одна секунда
+#: модельного времени (`dt=1.0` в `session.tick()`), поэтому значение меньше
+#: единицы ускоряет ход тренировки относительно реального времени. В штатной
+#: работе — 1.0; уменьшается в автотестах и в замерах задержек, чтобы не ждать
+#: реальные минуты. Переопределяется переменной `KTK_TICK_PERIOD_S`.
+TICK_PERIOD_S = float(os.getenv("KTK_TICK_PERIOD_S", "1.0"))
+
+
+def _run_detached(coro, what: str) -> None:
+    """
+    Выполнить работу вне области отмены обработчика соединения.
+
+    Когда клиент отключается, сервер отменяет задачу соединения, и любой
+    `await` в блоке `finally` немедленно получает `CancelledError` — дописать
+    что-либо в БД оттуда нельзя. Поэтому закрытие тренировки выносится в
+    отдельную задачу цикла событий: она не входит в отменённую область и
+    доводит запись до конца.
+    """
+    async def runner():
+        try:
+            await coro
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[ws] {what}: {e!r}")
+
+    task = asyncio.create_task(runner())
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
 
 @app.websocket("/ws")
@@ -142,7 +297,7 @@ async def ws(websocket: WebSocket):
       {"session_action":"reset"}                          — перезапустить
       {"session_action":"stop"}                           — завершить
       {"action":"set_valve","value":40, ...}              — команда оператора
-    сервер -> UI: WSMessage(state|feedback|action)
+    сервер -> UI: WSMessage(state|feedback|action), по завершении — assessment
     """
     user = await auth.ws_user(websocket)
     await websocket.accept()
@@ -158,23 +313,80 @@ async def ws(websocket: WebSocket):
     last_event_t = time.time()
     ticker_task: asyncio.Task | None = None
 
+    # Разделяет такт симуляции и завершение тренировки. Такт пишет телеметрию
+    # и ошибки, завершение по ним считает оценку — и делать это одновременно
+    # нельзя: такт, начавшийся до нажатия «Завершить», успевал дописать ошибку
+    # уже после того, как оценка сформирована, и она эту ошибку не учитывала.
+    tick_lock = asyncio.Lock()
+
+    async def finish(status_: str) -> dict | None:
+        """
+        Закрыть текущую тренировку и сформировать оценку — ровно один раз.
+
+        Вызывается из четырёх мест: кнопка «Завершить», сброс, старт следующего
+        сценария и обрыв канала. `finalize_session` завершает запись, только
+        если та ещё активна, поэтому повторный вызов ничего не портит и второй
+        оценки не создаёт.
+        """
+        async with tick_lock:
+            # Под замком дожидаемся такта, который уже начался, и обнуляем
+            # идентификатор: следующий такт увидит None и писать не станет.
+            sid, sess.session_id = sess.session_id, None
+            if not sid:
+                return None
+            if not await storage.finalize_session(sid, status_, user_id=user["id"], ip=ip):
+                return None
+        # Замок больше не нужен: в эту тренировку уже никто не пишет,
+        # а считать оценку под ним — задерживать такты на пустом месте.
+        return await storage.build_assessment(sid)
+
     async def ticker():
-        try:
-            while True:
+        """
+        Отдаёт состояние установки раз в TICK_PERIOD_S.
+
+        Момент следующего такта отсчитывается от расписания, а не от конца
+        обработки: иначе к периоду каждый раз прибавлялись бы шаг симуляции и
+        запись в БД, и за длинную тренировку время на мнемосхеме заметно
+        разошлось бы с реальным.
+        """
+        next_at = time.monotonic()
+        while True:
+            next_at += TICK_PERIOD_S
+            # Такт целиком под замком: либо он успевает записать свои данные
+            # до формирования оценки, либо видит уже обнулённый идентификатор
+            # и не пишет вовсе. Промежуточного состояния нет.
+            async with tick_lock:
                 if sess.active:
                     state, feedback, events = sess.tick()
+                    sid = sess.session_id
                     await websocket.send_text(WSMessage(
                         type=WSMessageType.STATE, payload=state.model_dump()).model_dump_json())
                     await websocket.send_text(WSMessage(
                         type=WSMessageType.FEEDBACK, payload=feedback.model_dump()).model_dump_json())
-                    if sess.session_id:
-                        await storage.save_telemetry(sess.session_id, state)
-                        await storage.save_error(sess.session_id, feedback)
-                await asyncio.sleep(1.0)
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+                    if sid:
+                        await storage.save_telemetry(sid, state)
+                        await storage.save_error(sid, feedback)
+            delay = next_at - time.monotonic()
+            if delay < 0:
+                # такт не уложился в период — не копим долг, начинаем отсчёт заново
+                next_at = time.monotonic()
+                delay = 0.0
+            await asyncio.sleep(delay)
 
-    ticker_task = asyncio.create_task(ticker())
+    async def ticker_guarded():
+        """
+        Обёртка над ticker: отмена и обрыв канала — штатные, остальное печатаем.
+        Без неё упавшая задача умирала молча: телеметрия прекращалась, а в
+        интерфейсе это выглядело как «связь есть, но параметры застыли».
+        """
+        try:
+            await ticker()
+        except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+            pass
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[ws] такт симуляции прерван: {e!r}")
+
+    ticker_task = asyncio.create_task(ticker_guarded())
     try:
         while True:
             raw = await websocket.receive_text()
@@ -184,20 +396,42 @@ async def ws(websocket: WebSocket):
             if "session_action" in msg:
                 sa = msg["session_action"]
                 if sa == "start":
+                    # предыдущая тренировка закрывается, иначе она навсегда
+                    # осталась бы в статусе active и без оценки
+                    await finish("aborted")
                     code = msg.get("scenario", "startup")
                     sc = await storage.get_scenario(code)
-                    ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
-                    if ok:
-                        sess.session_id = await storage.create_session(
-                            sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
-                        last_event_t = time.time()
+                    # Под замком, чтобы такт не застал тренировку уже активной,
+                    # но ещё без записи в БД: `sess.start` выставляет active
+                    # сразу, а create_session — это поход в базу. В это окно
+                    # первые такты уходили в никуда, а список тренировок ещё
+                    # не показывал начатую.
+                    async with tick_lock:
+                        ok = sess.start(code, sc["initial"], sc["faults"]) if sc else sess.start(code)
+                        if ok:
+                            sess.load_reference(await storage.get_reference_steps(code))
+                            sess.session_id = await storage.create_session(
+                                sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
+                            last_event_t = time.time()
                 elif sa == "reset":
-                    sess.reset(); last_event_t = time.time()
+                    # сброс — это новая попытка: старую закрываем и заводим
+                    # отдельную запись, иначе в журнале смешались бы два прогона
+                    await finish("aborted")
+                    async with tick_lock:
+                        sess.reset()
+                        if sess.scenario_id:
+                            sess.session_id = await storage.create_session(
+                                sess.scenario_id, sess.operator, user_id=user["id"], ip=ip)
+                        last_event_t = time.time()
                 elif sa == "stop":
                     sess.stop()
-                    if sess.session_id:
-                        await storage.end_session(sess.session_id, user_id=user["id"], ip=ip)
-                        assessment = await storage.build_assessment(sess.session_id)
+                    assessment = await finish("finished")
+                    if assessment:
+                        # оператору эталонные шаги закрыты и здесь: иначе их
+                        # можно было бы прочитать сразу после «Завершить»,
+                        # не открывая разбор
+                        if user["role"] not in SUPERVISOR_ROLES:
+                            assessment = storage.hide_steps(assessment)
                         await websocket.send_text(json.dumps(
                             {"type": "assessment", "payload": assessment}, ensure_ascii=False))
                 continue
@@ -208,6 +442,8 @@ async def ws(websocket: WebSocket):
             reaction = int((time.time() - last_event_t) * 1000)
             action = OperatorAction(t=sess.engine.t, action=cmd.action,
                                     target=cmd.target, value=cmd.value, reaction_ms=reaction)
+            # ИИ разбирает действие на ближайшем такте, в контексте состояния
+            sess.record_action(action)
             if sess.session_id:
                 await storage.save_action(sess.session_id, action)
             await websocket.send_text(WSMessage(
@@ -217,3 +453,8 @@ async def ws(websocket: WebSocket):
     finally:
         if ticker_task:
             ticker_task.cancel()
+        # обрыв связи не должен оставлять тренировку висеть в статусе active:
+        # закрываем её и формируем оценку по тому, что успели записать.
+        # Отдельной задачей — здесь мы уже в отменённой области (см. _run_detached).
+        sess.stop()
+        _run_detached(finish("aborted"), "не удалось закрыть прерванную тренировку")

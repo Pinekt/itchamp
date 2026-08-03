@@ -1,0 +1,68 @@
+# Боевой стек КТК ЭЛОУ-АВТ для небольшого сервера (1 ядро, 1 ГБ ОЗУ).
+#
+#   cd deploy && docker compose -f docker-compose.prod.yml up -d --build
+#
+# Отличия от корневого docker-compose.yml, который предназначен для разработки:
+#
+#   • нет pgAdmin. На разработке он удобен, здесь — самый прожорливый
+#     контейнер стека (300–400 МБ), а смотреть базу можно через psql;
+#   • порты не торчат наружу. Приложение слушает 127.0.0.1:8000, снаружи его
+#     публикует nginx; порт PostgreSQL не публикуется вовсе. В корневом файле
+#     оба открыты на все интерфейсы — на общедоступном сервере так нельзя;
+#   • пароли и ключ подписи берутся из файла .env рядом с этим файлом, а не
+#     из значений по умолчанию. Файл создаёт deploy/install.sh, в git его нет;
+#   • заданы пределы памяти. Это страховка: при утечке контейнер умрёт сам,
+#     а не утянет за собой весь сервер;
+#   • PostgreSQL настроен под малую память параметрами запуска.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ktk-postgres
+    environment:
+      POSTGRES_USER: ktk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?не задан POSTGRES_PASSWORD в deploy/.env}
+      POSTGRES_DB: ktk_eloyavt
+    command: >
+      postgres
+      -c max_connections=30
+      -c shared_buffers=96MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=32MB
+      -c effective_cache_size=256MB
+    volumes:
+      - ktk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ktk -d ktk_eloyavt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ktk-trainer:latest
+    container_name: ktk-trainer
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ktk:${POSTGRES_PASSWORD}@db:5432/ktk_eloyavt
+      KTK_SECRET_KEY: ${KTK_SECRET_KEY:?не задан KTK_SECRET_KEY в deploy/.env}
+      # 1 — cookie сеанса только по HTTPS. Переключает deploy/enable-https.sh:
+      # до выпуска сертификата вход по http перестал бы работать.
+      KTK_COOKIE_SECURE: ${KTK_COOKIE_SECURE:-0}
+      # Применяются только при первом запуске на пустой базе: пароль по
+      # умолчанию совпадает с логином, а стенд общедоступен.
+      KTK_PASSWORD_OPERATOR: ${KTK_PASSWORD_OPERATOR:?не задан в deploy/.env}
+      KTK_PASSWORD_INSTRUCTOR: ${KTK_PASSWORD_INSTRUCTOR:?не задан в deploy/.env}
+      KTK_PASSWORD_ADMIN: ${KTK_PASSWORD_ADMIN:?не задан в deploy/.env}
+    # только петля: наружу публикует nginx
+    ports: ["127.0.0.1:${APP_PORT:-8000}:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 320m
+    restart: unless-stopped
+
+volumes:
+  ktk_pgdata:

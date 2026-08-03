@@ -82,6 +82,12 @@ class AIFeedback(BaseModel):
     message: str = ""            # интерпретируемое объяснение «почему неверно»
     recommendation: Optional[str] = None
     risk_score: Optional[float] = Field(None, description="Прогноз риска ошибки 0..1")
+    # Поля добавлены опциональными, чтобы не ломать уже написанный код:
+    # интерфейс и хранилище работают и без них.
+    reference: Optional[str] = Field(
+        None, description="Пункт технологического регламента, которым обосновано")
+    predicted_alarm_s: Optional[float] = Field(
+        None, description="Прогноз: через сколько секунд параметр достигнет уставки")
 
 
 # ---------- Сценарии обучения ----------
@@ -132,3 +138,53 @@ class UserInfo(BaseModel):
     login: str
     full_name: str
     role: Role
+
+
+# ---------- Администрирование (только роль admin) ----------
+# Пароли здесь только на вход: наружу не отдаётся ни пароль, ни его хеш.
+
+#: Логин — латиница, цифры и `_ . -`. Ограничение осознанное: логин попадает
+#: в журнал аудита и в имена учётных записей на стенде, где кириллица и
+#: пробелы создают лишние сложности.
+LOGIN_PATTERN = r"^[A-Za-z0-9_.\-]+$"
+
+
+class UserCreate(BaseModel):
+    """Заведение учётной записи администратором."""
+    login: str = Field(..., min_length=3, max_length=64, pattern=LOGIN_PATTERN)
+    full_name: str = Field(..., min_length=1, max_length=128)
+    role: Role = Role.OPERATOR
+    password: str = Field(..., max_length=256)
+
+
+class UserUpdate(BaseModel):
+    """Изменение учётной записи. Не указанные поля не трогаются."""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    role: Optional[Role] = None
+    active: Optional[bool] = None
+
+
+class PasswordReset(BaseModel):
+    """Назначение нового пароля администратором."""
+    password: str = Field(..., max_length=256)
+
+
+class UserDetail(BaseModel):
+    """Учётная запись в списке администратора."""
+    id: int
+    login: str
+    full_name: str
+    role: Role
+    active: bool
+    created_at: str
+
+
+class AuditEntry(BaseModel):
+    """Запись журнала аудита. `login` подставляется по user_id для читаемости."""
+    id: int
+    user_id: Optional[int] = None
+    login: Optional[str] = None
+    event: str
+    details: dict = {}
+    ip: Optional[str] = None
+    created_at: str

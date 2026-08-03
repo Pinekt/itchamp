@@ -51,6 +51,12 @@ MAX_FAILED_ATTEMPTS = int(os.getenv("KTK_MAX_FAILED_ATTEMPTS", "5"))
 FAILED_WINDOW_S = int(os.getenv("KTK_FAILED_WINDOW_S", "900"))    # 15 минут
 LOCKOUT_S = int(os.getenv("KTK_LOCKOUT_S", "300"))                # 5 минут
 
+#: Минимальная длина пароля, назначаемого через администрирование.
+#: Учебные учётные записи из `seed.py` короче намеренно (пароль равен логину,
+#: так удобнее на демонстрации) — политика распространяется на пароли, которые
+#: заводит администратор, а демо-записи README предписывает менять на стенде.
+MIN_PASSWORD_LENGTH = int(os.getenv("KTK_MIN_PASSWORD_LENGTH", "8"))
+
 _hasher = PasswordHasher()
 
 

@@ -33,6 +33,17 @@ class Base(DeclarativeBase):
 
 
 def _now() -> datetime:
+    """
+    Текущее время в UTC — со смещением, а не «голое».
+
+    Все колонки со временем объявлены как DateTime(timezone=True), то есть
+    TIMESTAMPTZ в PostgreSQL. Пара «наивное время в колонке без пояса» тоже
+    работала бы, но повод выбрать пояс есть: журнал аудита — это про «когда
+    именно», а сервер стенда и рабочие места могут жить в разных зонах.
+
+    Важно: смешивать нельзя. Время со смещением в колонку без пояса asyncpg
+    не примет вовсе (SQLite примет молча — на нём эта ошибка не всплывает).
+    """
     return datetime.now(timezone.utc)
 
 
@@ -47,7 +58,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), default="operator")
     password_hash: Mapped[str] = mapped_column(String(256), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class AuditLog(Base):
@@ -58,7 +69,7 @@ class AuditLog(Base):
     event: Mapped[str] = mapped_column(String(64))        # login, session_start, ...
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
 # ------------------------------------------------------- сценарии и эталонные шаги
@@ -73,7 +84,7 @@ class Scenario(Base):
     initial: Mapped[dict] = mapped_column(JSON, default=dict)   # начальное состояние
     faults: Mapped[list] = mapped_column(JSON, default=list)    # [{at,target,type}]
     difficulty: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class ScenarioStep(Base):
@@ -98,8 +109,8 @@ class TrainingSession(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     operator: Mapped[str] = mapped_column(String(128), default="unknown")
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|finished|aborted
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class OperatorAction(Base):
@@ -111,7 +122,7 @@ class OperatorAction(Base):
     target: Mapped[str | None] = mapped_column(String(64), nullable=True)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     reaction_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Telemetry(Base):
@@ -139,7 +150,7 @@ class DetectedError(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Assessment(Base):
@@ -153,7 +164,7 @@ class Assessment(Base):
     avg_reaction_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verdict: Mapped[str] = mapped_column(String(32), default="not_passed")  # passed|not_passed
     details: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 async def init_db(retries: int = 15, delay: float = 2.0) -> None:

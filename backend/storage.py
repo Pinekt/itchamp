@@ -55,6 +55,80 @@ async def audit(user_id: int | None, event: str, details: dict | None = None,
         await s.commit()
 
 
+# ------------------------------------------------------------ администрирование
+
+def _user_row(u: User) -> dict:
+    """Учётная запись наружу — без хеша пароля."""
+    return dict(id=u.id, login=u.login, full_name=u.full_name, role=u.role,
+                active=u.active, created_at=str(u.created_at))
+
+
+async def list_users() -> list[dict]:
+    async with Session() as s:
+        rows = (await s.execute(select(User).order_by(User.id))).scalars().all()
+        return [_user_row(u) for u in rows]
+
+
+async def create_user(login: str, full_name: str, role: str,
+                      password_hash: str) -> dict | None:
+    """Завести учётную запись. None — если логин уже занят."""
+    async with Session() as s:
+        exists = (await s.execute(select(User).where(User.login == login))).scalar_one_or_none()
+        if exists is not None:
+            return None
+        u = User(login=login, full_name=full_name, role=role,
+                 password_hash=password_hash, active=True)
+        s.add(u)
+        await s.commit()
+        return _user_row(u)
+
+
+async def update_user(user_id: int, **fields) -> dict | None:
+    """
+    Изменить учётную запись. Принимает только full_name, role и active —
+    пароль меняется отдельным методом, чтобы хеш не проходил через общий путь.
+    """
+    allowed = {k: v for k, v in fields.items()
+               if k in ("full_name", "role", "active") and v is not None}
+    async with Session() as s:
+        u = (await s.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if u is None:
+            return None
+        for k, v in allowed.items():
+            setattr(u, k, v)
+        await s.commit()
+        return _user_row(u)
+
+
+async def list_audit(limit: int = 100, offset: int = 0, user_id: int | None = None,
+                     event: str | None = None) -> list[dict]:
+    """
+    Журнал аудита, свежие записи первыми. Логин подставляется по user_id:
+    читать журнал по числовым идентификаторам неудобно, а хранить логин в самой
+    записи — значит расходиться с `users` после переименования.
+    """
+    async with Session() as s:
+        q = (select(AuditLog, User.login)
+             .join(User, User.id == AuditLog.user_id, isouter=True)
+             .order_by(AuditLog.id.desc()).limit(limit).offset(offset))
+        if user_id is not None:
+            q = q.where(AuditLog.user_id == user_id)
+        if event:
+            q = q.where(AuditLog.event == event)
+        rows = (await s.execute(q)).all()
+        return [dict(id=a.id, user_id=a.user_id, login=login, event=a.event,
+                     details=a.details or {}, ip=a.ip, created_at=str(a.created_at))
+                for a, login in rows]
+
+
+async def list_audit_events() -> list[str]:
+    """Встречающиеся в журнале виды событий — для выпадающего фильтра."""
+    async with Session() as s:
+        rows = (await s.execute(select(AuditLog.event).distinct()
+                                .order_by(AuditLog.event))).scalars().all()
+        return list(rows)
+
+
 # ---------------------------------------------------------------------- сценарии
 
 async def list_scenarios() -> list[dict]:
@@ -100,13 +174,27 @@ async def create_session(scenario_code: str, operator: str = "unknown",
     return sid
 
 
-async def end_session(session_id: str, status: str = "finished",
-                      user_id: int | None = None, ip: str | None = None) -> None:
+async def finalize_session(session_id: str, status: str = "finished",
+                           user_id: int | None = None, ip: str | None = None) -> bool:
+    """
+    Завершить тренировку — ровно один раз.
+
+    UPDATE ограничен условием `status == 'active'`, поэтому завершить уже
+    завершённую тренировку нельзя: возвращается False, и вызывающий код не
+    формирует вторую оценку. Это важно, потому что завершение приходит из
+    двух мест — по кнопке «Завершить» и при обрыве канала — и они могут
+    сработать подряд на одной тренировке.
+    """
     async with Session() as s:
-        await s.execute(update(TrainingSession).where(TrainingSession.id == session_id)
-                        .values(ended_at=datetime.now(timezone.utc), status=status))
+        res = await s.execute(
+            update(TrainingSession)
+            .where(TrainingSession.id == session_id, TrainingSession.status == "active")
+            .values(ended_at=datetime.now(timezone.utc), status=status))
         await s.commit()
+        if res.rowcount == 0:
+            return False
     await audit(user_id, "session_end", {"session": session_id, "status": status}, ip=ip)
+    return True
 
 
 async def list_sessions(limit: int = 50, user_id: int | None = None) -> list[dict]:
@@ -135,6 +223,25 @@ async def get_session_owner(session_id: str) -> dict | None:
         return None if r is None else dict(id=r.id, user_id=r.user_id,
                                            operator=r.operator,
                                            scenario_code=r.scenario_code)
+
+
+async def get_session_detail(session_id: str) -> dict | None:
+    """Шапка разбора: кто, какой сценарий, когда начал и сколько занял."""
+    async with Session() as s:
+        r = (await s.execute(select(TrainingSession)
+             .where(TrainingSession.id == session_id))).scalar_one_or_none()
+        if r is None:
+            return None
+        sc = (await s.execute(select(Scenario)
+              .where(Scenario.code == r.scenario_code))).scalar_one_or_none()
+        duration = (r.ended_at - r.started_at).total_seconds() if r.ended_at else None
+        return dict(id=r.id, scenario_code=r.scenario_code,
+                    scenario_name=sc.name if sc else r.scenario_code,
+                    scenario_description=sc.description if sc else "",
+                    user_id=r.user_id, operator=r.operator, status=r.status,
+                    started_at=str(r.started_at),
+                    ended_at=str(r.ended_at) if r.ended_at else None,
+                    duration_s=round(duration, 1) if duration is not None else None)
 
 
 # ------------------------------------------------------- действия, телеметрия, ИИ
@@ -170,51 +277,212 @@ async def get_journal(session_id: str) -> list[dict]:
     async with Session() as s:
         rows = (await s.execute(select(OperatorAction)
                 .where(OperatorAction.session_id == session_id)
-                .order_by(OperatorAction.t))).scalars().all()
+                .order_by(OperatorAction.t, OperatorAction.id))).scalars().all()
         return [dict(t=r.t, action=r.action, target=r.target, value=r.value,
                      reaction_ms=r.reaction_ms) for r in rows]
 
 
 async def get_errors(session_id: str) -> list[dict]:
+    """
+    Ошибки тренировки. Ссылка на пункт регламента подставляется из справочника
+    классов, а не хранится в записи: она свойство класса ошибки, а не
+    конкретного срабатывания. Хранить её в строке значило бы дублировать данные
+    и получить расхождение, как только формулировку в справочнике поправят.
+    """
+    from .ai_module import CATALOGUE
+
     async with Session() as s:
         rows = (await s.execute(select(DetectedError)
                 .where(DetectedError.session_id == session_id)
                 .order_by(DetectedError.t))).scalars().all()
-        return [dict(t=r.t, error_class=r.error_class, location=r.location,
-                     severity=r.severity, message=r.message,
-                     recommendation=r.recommendation, risk_score=r.risk_score)
+        out = []
+        for r in rows:
+            cls = CATALOGUE.get(r.error_class)
+            out.append(dict(t=r.t, error_class=r.error_class, location=r.location,
+                            severity=r.severity, message=r.message,
+                            recommendation=r.recommendation, risk_score=r.risk_score,
+                            reference=cls.reference if cls else None))
+        return out
+
+
+#: Предел выборки телеметрии за одну тренировку. Час записи с шагом 1 с — это
+#: 3600 точек; больше на график всё равно не поместится, а тянуть из БД
+#: неограниченную выборку по чужому session_id нельзя.
+TELEMETRY_LIMIT = 5000
+
+
+async def get_telemetry(session_id: str, limit: int = TELEMETRY_LIMIT) -> list[dict]:
+    """История параметров установки за тренировку — данные для графика разбора."""
+    async with Session() as s:
+        rows = (await s.execute(select(Telemetry)
+                .where(Telemetry.session_id == session_id)
+                .order_by(Telemetry.t).limit(limit))).scalars().all()
+        return [dict(t=r.t, pressure=r.pressure, temperature=r.temperature,
+                     flow=r.flow, level=r.level, running=r.running, alarms=r.alarms)
                 for r in rows]
 
 
 # ------------------------------------------------- оценка квалификации оператора
 
+#: Разрыв, после которого повторное срабатывание считается новой ошибкой, с
+#: модельного времени. ИИ-модуль оценивает состояние на каждом такте, поэтому
+#: одна непрекращающаяся авария даёт запись каждую секунду. Для журнала это
+#: правильно (видно, сколько она длилась), а для оценки — нет: иначе балл
+#: зависел бы от длительности аварии, а не от числа промахов оператора.
+EPISODE_GAP_S = 3.0
+
+
+def group_errors(rows: list[dict]) -> list[dict]:
+    """
+    Свести подряд идущие записи одного класса в один эпизод.
+
+    Возвращает эпизоды с временем начала и конца и числом записей: разбор
+    показывает «давление выше уставки, 40…45 с, 6 замеров» вместо шести
+    одинаковых строк.
+    """
+    episodes: list[dict] = []
+    for r in sorted(rows, key=lambda x: x["t"]):
+        last = episodes[-1] if episodes else None
+        if (last and last["error_class"] == r["error_class"]
+                and r["t"] - last["t_to"] <= EPISODE_GAP_S):
+            last["t_to"] = r["t"]
+            last["count"] += 1
+            # держим самую тяжёлую оценку и наибольший риск за эпизод
+            if r["severity"] == "error":
+                last["severity"] = "error"
+            if (r.get("risk_score") or 0) > (last.get("risk_score") or 0):
+                last["risk_score"] = r["risk_score"]
+            continue
+        episodes.append(dict(r, t_from=r["t"], t_to=r["t"], count=1))
+    return episodes
+
+
+#: Штрафы методики оценки, баллы из 100. Вынесены отдельно, чтобы инструктор
+#: видел «цену» каждого нарушения, а не искал числа по коду.
+PENALTY = dict(step_missed_critical=20.0, step_missed=8.0, step_late=5.0,
+               error_critical=25.0, error=8.0)
+#: Порог сдачи, баллы.
+PASS_SCORE = 70.0
+
+
+def _match_steps(steps: list[ScenarioStep], actions: list[OperatorAction]) -> list[dict]:
+    """
+    Сопоставить действия обучаемого с эталонной последовательностью.
+
+    Шаги разбираются по порядку: под каждый берётся первое подходящее действие
+    из тех, что идут после засчитанного предыдущего шага. Очерёдность важна —
+    на установке значим не только набор операций, но и их последовательность
+    (регламент, разд. 7.7.1.1).
+
+    Порядок определяется положением в списке, а не полем `t`: модельное время
+    идёт с шагом в секунду, и несколько команд подряд получают одинаковое `t`,
+    по которому их уже не различить. Список приходит отсортированным по (t, id),
+    то есть в фактическом порядке нажатий.
+
+    Оборудование сверяется, только если оно указано с обеих сторон: интерфейс
+    шлёт часть команд без target (клапан сырья на мнемосхеме один), и требовать
+    его там значило бы засчитывать верное действие как пропуск.
+    """
+    after = -1                      # индекс последнего засчитанного действия
+    result: list[dict] = []
+    for st in steps:
+        hit = None
+        for i in range(after + 1, len(actions)):
+            a = actions[i]
+            if a.action != st.expected_action:
+                continue
+            if st.expected_target and a.target and a.target != st.expected_target:
+                continue
+            hit = (i, a)
+            break
+        if hit is None:
+            result.append(dict(order_no=st.order_no, description=st.description,
+                               expected_action=st.expected_action,
+                               expected_target=st.expected_target,
+                               window_s=st.window_s, critical=st.critical,
+                               done=False, late=False, t=None))
+            continue
+        i, a = hit
+        after = i
+        result.append(dict(order_no=st.order_no, description=st.description,
+                           expected_action=st.expected_action,
+                           expected_target=st.expected_target,
+                           window_s=st.window_s, critical=st.critical,
+                           done=True, late=a.t > st.window_s, t=a.t))
+    return result
+
+
 async def build_assessment(session_id: str) -> dict:
     """
-    Свести итог тренировки: баллы, вердикт, среднее время реакции.
-    Базовая методика (уточняется Константином): 100 баллов минус штрафы
-    за ошибки; критические ошибки весят больше; порог сдачи — 70.
+    Свести итог тренировки: выполнение эталонных шагов, ошибки ИИ, время реакции.
+
+    Методика (базовая, уточняется Константином) — 100 баллов минус штрафы:
+    пропуск критического шага −20, обычного −8, выполнение позже отведённого
+    окна −5, критическая ошибка ИИ −25, прочая ошибка −8. Порог сдачи — 70.
+
+    Разбор шагов кладётся в `details.steps`: экран разбора показывает по нему,
+    что именно обучаемый пропустил, а не только итоговый балл.
     """
     async with Session() as s:
-        errs = (await s.execute(select(DetectedError)
-                .where(DetectedError.session_id == session_id))).scalars().all()
+        ts = (await s.execute(select(TrainingSession)
+              .where(TrainingSession.id == session_id))).scalar_one_or_none()
+        rows = (await s.execute(select(DetectedError)
+                .where(DetectedError.session_id == session_id)
+                .order_by(DetectedError.t))).scalars().all()
+        # в баллах считаем эпизоды, а не отдельные записи (см. group_errors)
+        errs = group_errors([dict(t=r.t, error_class=r.error_class,
+                                  severity=r.severity, risk_score=r.risk_score)
+                             for r in rows])
+        # (t, id): внутри одной секунды модельного времени порядок нажатий
+        # виден только по идентификатору
+        actions = (await s.execute(select(OperatorAction)
+                   .where(OperatorAction.session_id == session_id)
+                   .order_by(OperatorAction.t, OperatorAction.id))).scalars().all()
         avg_react = (await s.execute(select(func.avg(OperatorAction.reaction_ms))
                 .where(OperatorAction.session_id == session_id))).scalar()
-        actions_n = (await s.execute(select(func.count(OperatorAction.id))
-                .where(OperatorAction.session_id == session_id))).scalar() or 0
 
-        critical = sum(1 for e in errs if e.severity == "error")
-        score = max(0.0, 100.0 - critical * 25.0 - (len(errs) - critical) * 8.0)
-        verdict = "passed" if score >= 70 else "not_passed"
+        steps: list[ScenarioStep] = []
+        if ts is not None:
+            sc = (await s.execute(select(Scenario)
+                  .where(Scenario.code == ts.scenario_code))).scalar_one_or_none()
+            if sc is not None:
+                steps = list((await s.execute(select(ScenarioStep)
+                             .where(ScenarioStep.scenario_id == sc.id)
+                             .order_by(ScenarioStep.order_no))).scalars().all())
+
+        matched = _match_steps(steps, actions)
+        missed_critical = sum(1 for m in matched if not m["done"] and m["critical"])
+        missed = sum(1 for m in matched if not m["done"] and not m["critical"])
+        late = sum(1 for m in matched if m["done"] and m["late"])
+        critical = sum(1 for e in errs if e["severity"] == "error")
+
+        penalties = {
+            "step_missed_critical": missed_critical * PENALTY["step_missed_critical"],
+            "step_missed": missed * PENALTY["step_missed"],
+            "step_late": late * PENALTY["step_late"],
+            "error_critical": critical * PENALTY["error_critical"],
+            "error": (len(errs) - critical) * PENALTY["error"],
+        }
+        score = max(0.0, 100.0 - sum(penalties.values()))
+        verdict = "passed" if score >= PASS_SCORE else "not_passed"
+
         by_class: dict[str, int] = {}
         for e in errs:
-            by_class[e.error_class] = by_class.get(e.error_class, 0) + 1
+            by_class[e["error_class"]] = by_class.get(e["error_class"], 0) + 1
 
         row = Assessment(
             session_id=session_id, total_score=round(score, 1),
             errors_count=len(errs), critical_errors=critical,
             avg_reaction_ms=int(avg_react) if avg_react else None,
             verdict=verdict,
-            details={"errors_by_class": by_class, "actions": actions_n},
+            details={"errors_by_class": by_class, "actions": len(actions),
+                     "steps": matched, "steps_total": len(matched),
+                     "steps_done": sum(1 for m in matched if m["done"]),
+                     "steps_late": late, "penalties": penalties,
+                     "pass_score": PASS_SCORE,
+                     # записей в журнале ошибок больше, чем эпизодов: авария
+                     # фиксируется на каждом такте, пока держится
+                     "error_records": len(rows)},
         )
         s.add(row)
         await s.commit()
@@ -228,8 +496,115 @@ async def get_assessment(session_id: str) -> dict | None:
     async with Session() as s:
         r = (await s.execute(select(Assessment)
              .where(Assessment.session_id == session_id)
-             .order_by(Assessment.created_at.desc()))).scalars().first()
+             .order_by(Assessment.id.desc()))).scalars().first()
         return None if r is None else dict(
             session_id=r.session_id, total_score=r.total_score,
             errors_count=r.errors_count, critical_errors=r.critical_errors,
             avg_reaction_ms=r.avg_reaction_ms, verdict=r.verdict, details=r.details)
+
+
+# --------------------------------------------------- история обучаемого
+
+async def get_trainee_history(user_id: int, limit: int = 20) -> list[dict]:
+    """
+    Завершённые тренировки обучаемого с их оценками — вход для подбора
+    следующего сценария. Свежие первыми.
+
+    Тренировки без оценки пропускаются: по ним нечего анализировать, а
+    попасть сюда они могут — например, тренировка, идущая прямо сейчас.
+    """
+    async with Session() as s:
+        sessions = (await s.execute(
+            select(TrainingSession)
+            .where(TrainingSession.user_id == user_id)
+            .order_by(TrainingSession.started_at.desc())
+            .limit(limit))).scalars().all()
+        if not sessions:
+            return []
+
+        # Оценки берём одним запросом: по запросу на тренировку — это
+        # двадцать походов в базу там, где хватает одного.
+        rows = (await s.execute(
+            select(Assessment)
+            .where(Assessment.session_id.in_([x.id for x in sessions]))
+            .order_by(Assessment.id))).scalars().all()
+        by_session = {a.session_id: a for a in rows}   # останется последняя
+
+        out = []
+        for x in sessions:
+            a = by_session.get(x.id)
+            if a is None:
+                continue
+            out.append(dict(
+                session_id=x.id, scenario_code=x.scenario_code, status=x.status,
+                started_at=str(x.started_at), total_score=a.total_score,
+                verdict=a.verdict,
+                errors_by_class=(a.details or {}).get("errors_by_class", {})))
+        return out
+
+
+# ------------------------------------------------------------ разбор тренировки
+
+def hide_steps(assessment: dict | None) -> dict | None:
+    """
+    Убрать из оценки разбор эталонных шагов.
+
+    Обучаемому он показывается только после того, как инструктор открыл разбор.
+    Без этого оставалась лазейка: начать тренировку, сразу завершить её и
+    прочитать в собственной оценке правильную последовательность действий —
+    то есть получить «ответы» к сценарию в обход `/reference`.
+
+    Сводка (сколько шагов из скольких, сколько с опозданием) остаётся: она
+    говорит, насколько всё плохо, но не подсказывает, что именно надо было
+    сделать.
+    """
+    if not assessment:
+        return assessment
+    details = dict(assessment.get("details") or {})
+    if details.get("released"):
+        return assessment
+    details.pop("steps", None)
+    return dict(assessment, details=details)
+
+
+async def release_debrief(session_id: str) -> bool:
+    """
+    Открыть обучаемому разбор эталонных шагов. False — если оценки ещё нет.
+
+    Признак кладём в `details` оценки, а не в отдельную колонку: таблицы
+    создаются через `create_all`, без миграций, и новый столбец сломал бы уже
+    развёрнутые базы — там его пришлось бы добавлять руками.
+    """
+    async with Session() as s:
+        r = (await s.execute(select(Assessment)
+             .where(Assessment.session_id == session_id)
+             .order_by(Assessment.id.desc()))).scalars().first()
+        if r is None:
+            return False
+        # переприсваиваем целиком: изменение внутри JSON-словаря SQLAlchemy
+        # не отслеживает и такое обновление молча не сохранилось бы
+        r.details = {**(r.details or {}), "released": True}
+        await s.commit()
+        return True
+
+async def get_debrief(session_id: str) -> dict | None:
+    """
+    Всё, что нужно экрану разбора, одним ответом: шапка, журнал действий,
+    телеметрия для графика, найденные ИИ ошибки и итоговая оценка.
+
+    Собрано в один запрос намеренно: раздельная загрузка четырьмя запросами
+    давала рассинхронизацию (оценка приходила раньше журнала) и четыре
+    проверки прав вместо одной.
+    """
+    detail = await get_session_detail(session_id)
+    if detail is None:
+        return None
+    errors = await get_errors(session_id)
+    return dict(session=detail,
+                journal=await get_journal(session_id),
+                telemetry=await get_telemetry(session_id),
+                errors=errors,
+                # эпизоды — то, что показывают на разборе; `errors` остаётся
+                # полным журналом, по нему видно длительность аварии
+                error_episodes=group_errors(errors),
+                assessment=await get_assessment(session_id))
