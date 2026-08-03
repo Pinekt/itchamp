@@ -24,7 +24,7 @@ set -euo pipefail
 
 DOMAIN="${1:-}"
 APP_DIR="${APP_DIR:-/opt/ktk}"
-BRANCH="${BRANCH:-claude/roles-auth-training-review-i9u90o}"
+BRANCH="${BRANCH:-main}"
 DEPLOY_USER=ktkdeploy
 UPDATE_BIN=/usr/local/sbin/ktk-update
 

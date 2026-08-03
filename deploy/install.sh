@@ -23,7 +23,7 @@ set -euo pipefail
 
 DOMAIN="${1:-}"
 REPO_URL="${REPO_URL:-https://github.com/mranton152/itchamp.git}"
-BRANCH="${BRANCH:-claude/roles-auth-training-review-i9u90o}"
+BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/ktk}"
 # На сервере может уже что-то слушать 8000 — порт можно переопределить:
 #   APP_PORT=8010 sudo -E bash deploy/install.sh <домен>

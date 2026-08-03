@@ -146,7 +146,7 @@ uvicorn backend.main:app --reload
 с Docker и nginx. Два шага:
 
 ```bash
-git clone -b claude/roles-auth-training-review-i9u90o \
+git clone -b main \
     https://github.com/mranton152/itchamp.git /opt/ktk
 sudo bash /opt/ktk/deploy/install.sh itchamp.root72.ru
 
@@ -182,8 +182,8 @@ sudo bash /opt/ktk/deploy/enable-https.sh itchamp.root72.ru
 
 ### Автоматическая выкладка
 
-После `install.sh` можно связать репозиторий со стендом: каждый push в ветку
-стенда сам обновляет сайт. Один раз на сервере:
+После `install.sh` можно связать репозиторий со стендом: каждый push в `main`
+сам обновляет сайт. Один раз на сервере:
 
 ```bash
 sudo bash /opt/ktk/deploy/setup-ci-deploy.sh itchamp.root72.ru
@@ -212,6 +212,19 @@ Secrets and variables → Actions**: `DEPLOY_HOST`, `DEPLOY_PORT`,
 - **отпечаток сервера закрепляется** (`ssh-keyscan`), а не отключается
   проверка ключа хоста;
 - **выкладки не накладываются** (`concurrency`): на сервере одно ядро.
+
+> **Имя ветки задаётся в двух местах, и они должны совпадать:** условие
+> задания «Выкладка стенда» в `.github/workflows/tests.yml` и переменная
+> `BRANCH` внутри `/usr/local/sbin/ktk-update` на сервере. Тянет ветку
+> именно скрипт на сервере, поэтому при расхождении конвейер останется
+> зелёным, а стенд будет показывать другой код. Переключить ветку на уже
+> настроенном сервере:
+>
+> ```bash
+> sudo sed -i 's|^BRANCH=.*|BRANCH=main|' /usr/local/sbin/ktk-update
+> sudo git -C /opt/ktk fetch origin main && sudo git -C /opt/ktk checkout main
+> sudo /usr/local/sbin/ktk-update
+> ```
 
 Отозвать доступ, если ключ утёк:
 `sudo rm /home/ktkdeploy/.ssh/authorized_keys`.

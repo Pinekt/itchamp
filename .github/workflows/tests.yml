@@ -17,11 +17,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  # Ветка, которую показывает общий стенд. Менять здесь и в
-  # deploy/setup-ci-deploy.sh (переменная BRANCH) одновременно.
-  STAND_BRANCH: claude/roles-auth-training-review-i9u90o
-
 jobs:
   sqlite:
     name: Тесты на SQLite
@@ -101,11 +96,16 @@ jobs:
   deploy:
     name: Выкладка стенда
     needs: [sqlite, postgres, docker]
-    # Только с ветки стенда и только из самого репозитория: у форка нет
-    # доступа к секретам, и выкладывать чужой код на общий стенд нельзя.
+    # Только с main и только из самого репозитория: у форка нет доступа к
+    # секретам, и выкладывать чужой код на общий стенд нельзя.
+    #
+    # Ветка здесь должна совпадать с той, что зашита в /usr/local/sbin/ktk-update
+    # на сервере: скрипт делает `git reset --hard origin/<ветка>` и тянет
+    # именно её, что бы ни было в этом файле. Разойдутся — конвейер станет
+    # зелёным, а стенд будет показывать чужой код.
     if: >-
       github.event_name == 'push' &&
-      github.ref_name == 'claude/roles-auth-training-review-i9u90o' &&
+      github.ref_name == 'main' &&
       github.repository == 'mranton152/itchamp'
     runs-on: ubuntu-latest
 
